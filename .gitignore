@@ -11,3 +11,9 @@ wheels/
 
 # Environment variables
 .env
+
+#uv lock files
+uv.lock
+
+#data directory
+data/

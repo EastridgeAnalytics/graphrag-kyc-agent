@@ -88,8 +88,8 @@ The AuraDB Professional option provides a fully managed solution with automatic 
 2. Create a virtual environment and install dependencies:
    ```bash
    uv venv
-   uv sync
    source .venv/bin/activate
+   uv sync
    ```
 
 3. Set up environment variables:
