@@ -81,8 +81,8 @@ The AuraDB Professional option provides a fully managed solution with automatic 
 
 1. Clone the repository:
    ```bash
-   git clone <repository-url>
-   cd kyc-agent
+   git clone https://github.com/neo4j-product-examples/graphrag-kyc-agent.git
+   cd graphrag-kyc-agent
    ```
 
 2. Create a virtual environment and install dependencies:
@@ -96,11 +96,14 @@ The AuraDB Professional option provides a fully managed solution with automatic 
    
    Create a `.env` file with your Neo4j and OpenAI credentials:
    ```
-   NEO4J_URI=<your-neo4j-uri> - leave blank if running docker. Otherwise take from  your Professional instance credentials
-   NEO4J_USER=<your-username> - leave blank if running docker. Otherwise take from  your Professional instance credentials
-   NEO4J_PASSWORD=<your-password> - leave blank if running docker. Otherwise take from  your Professional instance credentials
-   NEO4J_DATABASE=neo4j
    OPENAI_API_KEY=sk-... - Your OpenAI key
+   ```
+   If you are using an AuraDB Professional tier instance, use the downloaded credentials and add to your `.env` file:
+   ```
+   NEO4J_URI=<your-neo4j-uri> 
+   NEO4J_USER=<your-username> 
+   NEO4J_PASSWORD=<your-password> 
+   NEO4J_DATABASE=neo4j
    ```
 
 # **Run the Agent**
