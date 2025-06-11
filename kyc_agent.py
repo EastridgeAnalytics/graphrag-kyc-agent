@@ -164,15 +164,15 @@ def create_memory(content: str, customer_ids: list[str] = [], account_ids: list[
             WITH m
             UNWIND $customer_ids as cid
             MATCH (c:Customer {id: cid})
-            MERGE (m)-[:RELATES_TO]->(c)
+            MERGE (m)-[:FOR_CUSTOMER]->(c)
             WITH m
             UNWIND $account_ids as aid
             MATCH (a:Account {id: aid})
-            MERGE (m)-[:RELATES_TO]->(a)
+            MERGE (m)-[:FOR_ACCOUNT]->(a)
             WITH m
             UNWIND $transaction_ids as tid
             MATCH (t:Transaction {id: tid})
-            MERGE (m)-[:RELATES_TO]->(t)
+            MERGE (m)-[:FOR_TRANSACTION]->(t)
             RETURN m.content as content
             """,
             content=content,
