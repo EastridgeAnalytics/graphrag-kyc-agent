@@ -6,17 +6,18 @@ from typing import List, Optional
 class CustomerAccountsInput(BaseModel):
     customer_id: str
 
-class AccountModel(BaseModel):
-    account_id: Optional[str] = None
-    name: Optional[str] = None
-
 class TransactionModel(BaseModel):
-    transaction_id: Optional[str] = None
+    id: Optional[str] = None
     amount: Optional[float] = None
     timestamp: Optional[str] = None
 
+class AccountModel(BaseModel):
+    id: str = None
+    name: str = None
+    transactions: List[TransactionModel] = []
+
 class CustomerModel(BaseModel):
-    customer_id: Optional[str] = None
+    id: Optional[str] = None
     name: Optional[str] = None
     on_watchlist: Optional[bool] = False
     is_pep: Optional[bool] = False
@@ -24,7 +25,6 @@ class CustomerModel(BaseModel):
 class CustomerAccountsOutput(BaseModel):
     customer: CustomerModel
     accounts: List[AccountModel]
-    transactions: List[TransactionModel]
 
 # Tool 2: Identify watchlisted customers in suspicious rings
 from typing import Dict, Any

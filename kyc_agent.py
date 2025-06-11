@@ -34,9 +34,14 @@ driver = get_neo4j_driver()
 
 # Tool 1: Get Customer details and its Accounts and some recent transactions
 @function_tool
-def get_customer_and_accounts(input: CustomerAccountsInput) -> CustomerAccountsOutput:
+def get_customer_and_accounts(input: CustomerAccountsInput, tx_limit: int = 5) -> CustomerAccountsOutput:
     """
-    Get Customer details and its Accounts and some recent transactions
+    Get Customer details including its Accounts and some recent transactions.
+    Limits the number of most recent transactions per account.
+    
+    Args:
+        input: CustomerAccountsInput containing customer_id
+        tx_limit: Maximum number of recent transactions to return per account (default: 5)
     """
     logger.info(f"TOOL: GET_CUSTOMER_AND_ACCOUNTS - {input.customer_id}")
 
@@ -44,25 +49,32 @@ def get_customer_and_accounts(input: CustomerAccountsInput) -> CustomerAccountsO
         result = session.run(
             """
             MATCH (c:Customer {id: $customer_id})-[o:OWNS]->(a:Account)
-            OPTIONAL MATCH (a)-[b:TO|FROM]->(t:Transaction)
-            RETURN c, collect(DISTINCT(a)) as accounts, collect(DISTINCT(t)) as transactions
+            WITH c, a
+            CALL (c,a) {
+                MATCH (a)-[b:TO|FROM]->(t:Transaction)
+                ORDER BY t.timestamp DESC
+                LIMIT $tx_limit
+                RETURN collect(t) as transactions
+            }
+            RETURN c as customer, a as account, transactions
             """,
-            customer_id=input.customer_id
+            customer_id=input.customer_id,
+            tx_limit=tx_limit
         )
-        record = result.single()
-        if not record:
-            return CustomerAccountsOutput(
-                customer=CustomerModel(customer_id=None),
-                accounts=[],
-                transactions=[]
-            )
-        customer = dict(record["c"])
-        accounts = [dict(a) for a in record["accounts"]]
-        transactions = [dict(t) for t in record["transactions"] if t]
+        # Get the records from the result
+        records = result.data()
+        # Initialize lists to store the customer, accounts, and transactions
+        accounts = []
+        for record in records:
+            customer = dict(record["customer"])
+            account = dict(record["account"])
+            account["transactions"] = [dict(t) for t in record["transactions"]]
+            accounts.append(account)
+            
+
         return CustomerAccountsOutput(
             customer=CustomerModel(**customer),
-            accounts=[AccountModel(**a) for a in accounts],
-            transactions=[TransactionModel(**t) for t in transactions]
+            accounts=[AccountModel(**a) for a in accounts]
         )
        
 
