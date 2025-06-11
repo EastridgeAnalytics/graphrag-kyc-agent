@@ -70,7 +70,19 @@ def get_customer_and_accounts(input: CustomerAccountsInput) -> CustomerAccountsO
 @function_tool 
 def find_customer_rings(max_number_rings: int = 10, customer_in_watchlist: bool = True, customer_is_pep: bool = False, customer_id: str = None):
     """
-    Identify watchlisted customers in suspicious rings
+    Detects circular transaction patterns (up to 6 hops) involving high-risk customers.
+    
+    Finds account cycles where the accounts are owned by customers matching specified
+    risk criteria (watchlisted and/or PEP status).
+    
+    Args:
+        max_number_rings: Maximum rings to return (default: 10)
+        customer_in_watchlist: Filter for watchlisted customers (default: True)
+        customer_is_pep: Filter for PEP customers (default: False)
+        customer_id: Specific customer to focus on (not implemented)
+    
+    Returns:
+        dict: Contains ring paths and associated high-risk customers
     """
     logger.info(f"TOOL: FIND_CUSTOMER_RINGS - {max_number_rings} - {customer_in_watchlist} - {customer_is_pep}")
     with driver.session() as session:
