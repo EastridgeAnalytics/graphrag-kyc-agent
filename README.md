@@ -37,45 +37,22 @@ You will be using the OpenAI Agent SDK with an OpenAI model, so you need an OPEN
 
 # **Neo4j**
 
-The project includes a synthetic dataset of 10,000 Customers with rich details including:
-- Customer accounts and transactions
-- Device and IP address information
-- Employer relationships
-- Watchlist and PEP status
-
-You have two options for loading this dataset:
+You have two options to create a Free Neo4j database
 
 ## Option 1: Local Neo4j Docker Instance
 
-1. Convert the backup file to a database folder and load it:
-   ```bash
-   docker run --interactive --tty --rm \
-       --volume=./data:/data \
-       --volume=./backup:/backup \
-       --env=NEO4J_ACCEPT_LICENSE_AGREEMENT=yes \
-       neo4j/neo4j-admin:enterprise \
-   neo4j-admin database load neo4j --from-path=/backup
-   ```
-2. Start a Neo4j docker container using the provided docker-compose.yml:
-   ```bash
-   docker compose up -d
-   ```
 
-## Option 2: Neo4j AuraDB Professional (Managed Instance)
+Start a Neo4j docker container using the provided docker-compose.yml:
+```bash
+docker compose up -d
+```
 
-1. Sign up for a [Free Trial of Neo4j AuraDB Professional](https://console.neo4j.io/)
+## Option 2: Neo4j AuraDB Free (Managed Instance)
 
-2. Create a new database instance, Choose `AuraDB Professional (1GB Memory)`
+1. Head over to [Neo4j AuraDB Console](https://console.neo4j.io/)
 
-3. Locate your instance `Backup and Restore` option:
-![Backup and Restore in Aura Console](images/image1.png)
-Upload the backup file `./backup/kyc-data.backup`
-
-The backup will take a couple of minutes to restore. 
-Wait for your instance status to be RUNNING.
-
-The AuraDB Professional option provides a fully managed solution with automatic updates, backups, and scaling capabilities.
-
+2. Create a new database instance, Choose `AuraDB Free`.
+Make sure to download your credentials.
 
 # **Prepare to Run the Agent**
 
@@ -98,13 +75,24 @@ The AuraDB Professional option provides a fully managed solution with automatic 
    ```
    OPENAI_API_KEY=sk-... - Your OpenAI key
    ```
-   If you are using an AuraDB Professional tier instance, use the downloaded credentials and add to your `.env` file:
+
+   If you are using an AuraDB Free tier instance, find the downloaded credentials
+   Look at the NEO4J_URI and locate your instance id. 
+   For example, If your instance id is `NEO4J_URI=neo4j+s://4469a679.databases.neo4j.io`
+   Your instance id is `4469a679`.
+
+   Add the following to your `.env` file:
    ```
-   NEO4J_URI=<your-neo4j-uri> 
-   NEO4J_USER=<your-username> 
-   NEO4J_PASSWORD=<your-password> 
-   NEO4J_DATABASE=neo4j
+   NEO4J_URI=neo4j+s://<YOUR_INSTANCE_ID>.databases.neo4j.io
+   NEO4J_USERNAME=<YOUR_INSTANCE_ID>
+   NEO4J_PASSWORD=<YOUR_PASSWORD>
+   NEO4J_DATABASE=<YOUR_INSTANCE_ID>
    ```
+
+# **Load the dataset**
+```bash
+python generate_kyc_dataset.py
+```
 
 # **Run the Agent**
 
@@ -125,27 +113,25 @@ Test the agent tools with these example questions:
 
 2. Find suspicious rings:
    ```
-   Show me watchlisted customers involved in rings
+   Show me 3 watchlisted customers involved in rings
    ```
    This tests the `find_customer_rings` tool.
 
 3. Check shared addresses:
    ```
-   For the first customer, find all his addresses and find if they are shared with other customers
+   For each of these customers, find their addresses and find out if they are shared with other customers
    ```
    This tests both the `Text-to-Cypher Generation` tool and the `MCP Neo4j server exec read query` tool.
 
 4. Recent transactions:
    ```
-   Find more details about this customer (accounts and recent transactions)
+   Find more details about the customer with the shared adddress. List accounts and recent transactions
    ```
    This tests the ` get_customer_and_accounts` tool. 
 
 
 5. Store conversation summary:
    ```
-   Write a 500-word summary of this conversation. Store it as a memory, make sure to link it to every account and transasction mentioned in the conversation
+   Write a 300-word summary of this investigation into this customer. Store it as a memory, make sure to link it to accounts and transasction mentioned in the conversation
    ```
    This tests the `create_memory` tool.
-
-

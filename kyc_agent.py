@@ -14,6 +14,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+logging.getLogger("httpx").setLevel(logging.ERROR)
 logger = logging.getLogger("KYC_AGENT")
 
 # Load environment variables
@@ -21,7 +22,7 @@ load_dotenv()
 
 # Read Neo4j environment variables into variables
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_USER = os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
@@ -191,10 +192,7 @@ async def generate_cypher(request: GenerateCypherRequest) -> str:
     Generate a Cypher query from natural language using a local finetuned text2cypher Ollama model
     """
     USER_INSTRUCTION = """Generate a Cypher query for the Question below:
-    1. If the Question specifically requests the database schema or asks to visualize/display the structure of the database,
-    return only the following command (and nothing else): 
-    CALL db.schema.visualization()
-    2. Otherwise, use the information about the nodes, relationships, and properties from the Schema section below to generate the best possible Cypher query. 
+    Use the information about the nodes, relationships, and properties from the Schema section below to generate the best possible Cypher query. 
     Return only the Cypher query as your final output, without any additional text or explanation.
     ####Schema:
     {schema}
