@@ -76,9 +76,11 @@ Make sure to download your credentials.
    OPENAI_API_KEY=sk-... - Your OpenAI key
    ```
 
-   If you are using an AuraDB Free tier instance, find the downloaded credentials
+   If you are using an AuraDB Free tier instance, find the downloaded credentials.
    Look at the NEO4J_URI and locate your instance id. 
+
    For example, If your instance id is `NEO4J_URI=neo4j+s://4469a679.databases.neo4j.io`
+   
    Your instance id is `4469a679`.
 
    Add the following to your `.env` file:
