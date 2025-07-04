@@ -187,7 +187,7 @@ def create_memory(content: str, customer_ids: list[str] = [], account_ids: list[
 
 # Tool 5: Text-to-Cypher Generation
 @function_tool
-async def generate_cypher(request: GenerateCypherRequest) -> str:
+def generate_cypher(request: GenerateCypherRequest) -> str:
     """
     Generate a Cypher query from natural language using a local finetuned text2cypher Ollama model
     """
@@ -206,7 +206,7 @@ async def generate_cypher(request: GenerateCypherRequest) -> str:
     )
     # Generate Cypher query using the text2cypher model
     model: str = "ed-neo4j/t2c-gemma3-4b-it-q8_0-35k"
-    response = await chat(
+    response = chat(
         model=model,
         messages=[{"role": "user", "content": user_message}]
     )
