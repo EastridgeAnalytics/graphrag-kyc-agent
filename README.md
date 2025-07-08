@@ -8,15 +8,22 @@ Before running the KYC Agent, ensure you have the following prerequisites instal
 
 1. **Python 3.13+**
    - Download and install Python 3.13
-   - Verify installation with: `python --version`
+   - Verify installation with:
+   ```bash
+   python --version
+   ```
+    
 
 2. **uv Package Manager**
    - [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
-   - Verify installation with: `uv --version`
+   - Verify installation with: 
+   ```bash
+   uv --version
+   ```
 
 3. **Ollama**
-   - Ideally, you need a device for 6GB GPU Memory (the model itself is about 4.1GB)
-   - Install [Ollama] (https://ollama.com/download)
+   - Ideally, you need a device with 6GB GPU Memory (the model weights take about 4.1GB)
+   - [Install Ollama](https://ollama.com/download)
    - Start the Ollama server:
      ```bash
      ollama serve

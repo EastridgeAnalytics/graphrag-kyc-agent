@@ -10,6 +10,9 @@ from datetime import datetime, timedelta
 # reads .env into os.environ
 load_dotenv()  
 
+# Seed the RNG—use any constant (e.g. 42)
+random.seed(42)
+
 # ———————————————
 # 0. Neo4j Aura Connection Setup
 # ———————————————
