@@ -11,4 +11,11 @@ dependencies = [
     "ollama>=0.5.1",
     "openai-agents>=0.0.17",
     "python-dotenv>=1.1.0",
+    "streamlit>=1.38.0",
+    "pandas>=2.2.2",
+    "pydeck>=0.9.0",
+    "streamlit-agraph>=0.0.42",
+    "graphviz>=0.20.3",
+    "langchain>=0.2.11",
+    "langchain-openai>=0.1.17",
 ]

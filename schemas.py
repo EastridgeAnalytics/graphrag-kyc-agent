@@ -46,3 +46,21 @@ class CustomerRingsOutput(BaseModel):
 class GenerateCypherRequest(BaseModel):
     question: str
     database_schema: str
+
+
+# Alert Model
+class AlertModel(BaseModel):
+    id: str
+    description: str
+    timestamp: str
+    latitude: float
+    longitude: float
+    status: str
+
+# SAR Draft Model
+class SARDraftModel(BaseModel):
+    id: str
+    narrative: str
+    created_at: str
+    status: str
+    analyst_commentary: str

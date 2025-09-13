@@ -44,7 +44,7 @@ def get_session():
 with get_session() as sess:
     
     for label in ('Customer','Account','Company','Address',
-                  'Device','IP_Address','Payment_Method','Transaction'):
+                  'Device','IP_Address','Payment_Method','Transaction','Alert','SAR_Draft'):
         sess.execute_write(
             lambda tx, L=label: tx.run(
                 f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{L}) REQUIRE n.id IS UNIQUE"
@@ -519,3 +519,51 @@ with get_session() as sess:
     end_time = time.perf_counter()
     elapsed = end_time - start_time
     print(f"⌛ Loading Anomalies: Dense clusters - Around shared address & payment method took {elapsed:.2f} seconds")
+
+
+# 6. Generate Alerts
+n_alerts = 100
+alert_rows = []
+alert_counter = 0
+
+# London coordinates
+london_lat = 51.5074
+london_lon = -0.1278
+
+alertable_customers = random.sample(customer_rows, n_alerts)
+
+for customer in alertable_customers:
+    alert_counter += 1
+    aid = f"ALERT_{alert_counter:04d}"
+    alert_rows.append({
+        "cust": customer["id"],
+        "alert_id": aid,
+        "description": f"Suspicious login detected for customer {customer['id']}",
+        "timestamp": (datetime(2025,1,1) + timedelta(days=random.randint(0,120))).isoformat(),
+        "latitude": london_lat + random.uniform(-0.05, 0.05),
+        "longitude": london_lon + random.uniform(-0.05, 0.05),
+        "status": "new"
+    })
+
+with get_session() as sess:
+    start_time = time.perf_counter()
+    sess.run(
+        """
+        UNWIND $rows AS row
+        CALL (row) {
+          MERGE (a:Alert {id: row.alert_id})
+          SET a.description = row.description,
+              a.timestamp = row.timestamp,
+              a.latitude = row.latitude,
+              a.longitude = row.longitude,
+              a.status = row.status
+          WITH a, row
+          MATCH (c:Customer {id: row.cust})
+          MERGE (c)-[:HAS_ALERT]->(a)
+        } IN TRANSACTIONS OF $batch_size ROWS
+        """,
+        rows=alert_rows, batch_size=50
+    )
+    end_time = time.perf_counter()
+    elapsed = end_time - start_time
+    print(f"⌛ Loading Alerts took {elapsed:.2f} seconds")

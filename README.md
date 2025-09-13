@@ -144,3 +144,39 @@ Test the agent tools with these example questions:
    Write a 300-word summary of this investigation into this customer. Store it as a memory, make sure to link it to accounts and transasction mentioned in the conversation
    ```
    This tests the `create_memory` tool.
+
+
+# **Run the AML Analyst Workbench**
+
+This project includes a Streamlit application that simulates a futuristic AML Analyst Workbench.
+
+## **Setup**
+
+1.  **Activate the virtual environment**:
+    ```bash
+    source .venv/bin/activate
+    ```
+
+2.  **Install all dependencies**:
+    This command will install all the necessary packages for both the agent and the Streamlit application from the `pyproject.toml` file.
+    ```bash
+    uv sync
+    ```
+
+3.  **Ensure your `.env` file is configured** with your Neo4j and OpenAI credentials as described in the sections above.
+
+4.  **Load the dataset**:
+    Make sure your Neo4j database is populated with the sample data, including the alerts.
+    ```bash
+    python generate_kyc_dataset.py
+    ```
+
+## **Running the Application**
+
+Once the setup is complete, you can launch the Streamlit application:
+
+```bash
+streamlit run graphrag-kyc-agent/aml_workbench.py
+```
+
+The application will open in your web browser, and you can start exploring the AML Analyst Workbench.
