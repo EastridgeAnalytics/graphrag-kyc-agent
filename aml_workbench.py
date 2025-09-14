@@ -14,218 +14,228 @@ st.set_page_config(layout="wide")
 st.title("AML Analyst Workbench")
 
 # Initialize session state
-if 'selected_alert' not in st.session_state:
-    st.session_state.selected_alert = None
-if 'investigated_alert_id' not in st.session_state:
-    st.session_state.investigated_alert_id = None
-if 'sar_narrative' not in st.session_state:
-    st.session_state.sar_narrative = None
+if 'selected_alert_id' not in st.session_state:
+    st.session_state.selected_alert_id = None
 if 'selected_sar_id' not in st.session_state:
     st.session_state.selected_sar_id = None
-if 'selected_sar_draft' not in st.session_state:
-    st.session_state.selected_sar_draft = None
+if 'selected_view' not in st.session_state:
+    st.session_state.selected_view = None
+# Robustly initialize sar_narrative as a dictionary to prevent errors
+if 'sar_narrative' not in st.session_state or st.session_state.sar_narrative is None:
+    st.session_state.sar_narrative = {}
+
 
 def rerun():
-    st.session_state.clear()
+    # Preserve selection across reruns if needed, or clear state
     st.experimental_rerun()
 
-tab1, tab2, tab3 = st.tabs(["Alert Overview", "Research and Analysis", "SAR Review"])
+# Main layout with three columns
+left_col, main_col, right_col = st.columns([1, 2.5, 1.5])
 
-with tab1:
-    st.header("Alert Overview")
-    
+# Left Panel: Investigation Queue
+with left_col:
+    st.header("Investigation Queue")
+
+    # --- Alerts Section ---
+    st.subheader("New Alerts")
     alerts = get_alerts()
     
     if alerts:
-        st.subheader("New Alerts")
-        
-        num_columns = 4
-        # Create a new row of columns for every 4 alerts
-        for i in range(0, len(alerts), num_columns):
-            cols = st.columns(num_columns)
-            for j in range(num_columns):
-                if i + j < len(alerts):
-                    alert = alerts[i + j]
-                    with cols[j]:
-                        with st.container():
-                            st.write(f"**Alert ID:** {alert.id}")
-                            st.write(f"**Description:** {alert.description}")
-                            st.write(f"**Timestamp:** {alert.timestamp}")
-                            if st.button("Investigate", key=f"investigate_{alert.id}"):
-                                st.session_state.selected_alert = alert
-
-    if st.session_state.selected_alert:
-        st.divider()
-        selected_alert = st.session_state.selected_alert
-        st.subheader(f"Details for Alert: {selected_alert.id}")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Login Location")
-            
-            # Create a DataFrame for the map
-            map_df = pd.DataFrame({
-                'lat': [selected_alert.latitude],
-                'lon': [selected_alert.longitude]
-            })
-
-            view_state = pdk.ViewState(
-                latitude=selected_alert.latitude,
-                longitude=selected_alert.longitude,
-                zoom=12,
-                pitch=50,
-            )
-            
-            layer = pdk.Layer(
-                'HexagonLayer',
-                data=map_df,
-                get_position='[lon, lat]',
-                radius=100,
-                elevation_scale=4,
-                elevation_range=[0, 1000],
-                pickable=True,
-                extruded=True,
-            )
-            
-            st.pydeck_chart(pdk.Deck(
-                map_style=None,
-                initial_view_state=view_state,
-                layers=[layer],
-                tooltip={"text": "Login Location"}
-            ))
-
-        with col2:
-            st.subheader("Recent Transaction History")
-            customer_id = get_customer_for_alert(selected_alert.id)
-            if customer_id:
-                transactions_df = get_transactions_for_customer(customer_id)
-                if not transactions_df.empty:
-                    st.bar_chart(transactions_df[['debit', 'credit']])
-                else:
-                    st.write("No transactions found for the associated customer.")
+        # Prepare data with transaction history for BarChartColumn
+        alerts_data = []
+        for alert in alerts:
+            customer_id = get_customer_for_alert(alert.id)
+            transactions_df = get_transactions_for_customer(customer_id)
+            # Combine debit and credit for the chart, or use an empty list
+            if not transactions_df.empty:
+                # Using max to represent activity, could be sum() or other logic
+                transaction_history = (transactions_df['debit'] + transactions_df['credit']).tolist()
             else:
-                st.write("Could not find customer associated with this alert.")
+                transaction_history = []
 
+            alert_dict = alert.model_dump()
+            alert_dict['transaction_history'] = transaction_history
+            alerts_data.append(alert_dict)
+        
+        alert_df = pd.DataFrame(alerts_data)
+        # Add a selection column
+        alert_df.insert(0, "select", False)
 
-with tab2:
-    st.header("Research and Analysis")
-    
-    alert_id_input = st.text_input("Enter Alert ID to investigate")
-    
-    if st.button("Run Analysis", key="run_analysis"):
-        st.session_state.investigated_alert_id = alert_id_input
-        st.session_state.sar_narrative = None # Clear previous narrative
-    
-    if st.session_state.investigated_alert_id:
-        alert_id = st.session_state.investigated_alert_id
+        # Use st.data_editor to make a clickable dataframe
+        edited_df = st.data_editor(
+            alert_df[['select', 'id', 'description', 'transaction_history']],
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "select": st.column_config.CheckboxColumn(required=True),
+                "transaction_history": st.column_config.BarChartColumn(
+                    "Recent Transactions",
+                    y_min=0,
+                ),
+            },
+            disabled=alert_df.columns.drop("select"),
+            key="alert_editor"
+        )
+
+        # Find the selected row
+        selected_row = edited_df[edited_df.select]
+        if not selected_row.empty:
+            selected_alert_id = selected_row.iloc[0]['id']
+            # If selection changed, update state and rerun
+            if st.session_state.selected_alert_id != selected_alert_id:
+                st.session_state.selected_alert_id = selected_alert_id
+                st.session_state.selected_sar_id = None
+                st.session_state.selected_view = 'alert_analysis'
+                # No rerun here, let the script continue and redraw the other elements
+
+    else:
+        st.info("No new alerts.")
+
+    # --- SARs Section ---
+    st.subheader("Pending SAR Drafts")
+    sar_drafts = get_sar_drafts()
+    if sar_drafts:
+        sars_df = pd.DataFrame([d.model_dump() for d in sar_drafts])
+        sars_df.insert(0, "select", False)
+
+        edited_sars_df = st.data_editor(
+            sars_df[['select', 'id', 'status', 'created_at']],
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "select": st.column_config.CheckboxColumn(required=True),
+            },
+            disabled=sars_df.columns.drop("select"),
+            key="sar_editor"
+        )
+
+        selected_sar_row = edited_sars_df[edited_sars_df.select]
+        if not selected_sar_row.empty:
+            selected_sar_id = selected_sar_row.iloc[0]['id']
+            if st.session_state.selected_sar_id != selected_sar_id:
+                st.session_state.selected_sar_id = selected_sar_id
+                st.session_state.selected_alert_id = None
+                st.session_state.selected_view = 'sar_review'
+                # No rerun here, let the script continue
+        
+        # Conditionally display Accept/Reject buttons if a SAR is selected
+        if st.session_state.selected_view == 'sar_review' and st.session_state.selected_sar_id:
+            sar_id = st.session_state.selected_sar_id
+            st.write(f"**Reviewing:** `{sar_id}`")
+            
+            b_col1, b_col2 = st.columns(2)
+            with b_col1:
+                if st.button("Accept SAR", key=f"accept_{sar_id}", use_container_width=True):
+                    update_sar_status(sar_id, "accepted")
+                    st.success(f"SAR {sar_id} accepted.")
+                    st.session_state.selected_sar_id = None
+                    st.session_state.selected_view = None
+                    rerun()
+            with b_col2:
+                if st.button("Reject SAR", key=f"reject_{sar_id}", type="primary", use_container_width=True):
+                    update_sar_status(sar_id, "rejected")
+                    st.warning(f"SAR {sar_id} rejected.")
+                    st.session_state.selected_sar_id = None
+                    st.session_state.selected_view = None
+                    rerun()
+
+    else:
+        st.info("No pending SARs.")
+
+# Center Panel: The Canvas (Graph and Map)
+with main_col:
+    st.header("Analysis Canvas")
+
+    if st.session_state.selected_view == 'alert_analysis' and st.session_state.selected_alert_id:
+        alert_id = st.session_state.selected_alert_id
         st.subheader(f"Graph Visualization for Alert: {alert_id}")
         
         nodes, edges, df = get_graph_for_alert(alert_id)
-        
         if nodes:
-            config = Config(width=1200, 
-                            height=800, 
-                            directed=True, 
-                            physics=True, 
-                            hierarchical=False,
-                            nodeHighlightBehavior=True,
-                            highlightColor="#F7A7A6",
-                            collapsible=True,
-                            node={'labelProperty':'label'},
-                            link={'labelProperty': 'label', 'renderLabel': True}
-                            )
-            
-            agraph(nodes=nodes, edges=edges, config=config)
-            
-            st.subheader("Entities in Graph")
-            st.dataframe(df)
-            
+            graph_tab, entities_tab = st.tabs(["Graph Visualization", "Entities in Graph"])
+
+            with graph_tab:
+                config = Config(width=800, height=600, directed=True, physics=True, hierarchical=False,
+                                nodeHighlightBehavior=True, highlightColor="#F7A7A6", collapsible=True,
+                                node={'labelProperty':'label'}, link={'labelProperty': 'label', 'renderLabel': True})
+                agraph(nodes=nodes, edges=edges, config=config)
+
+            with entities_tab:
+                st.dataframe(df, use_container_width=True)
+
+            # Analyst Commentary and SAR generation under the graph
             st.subheader("Analyst Commentary")
-            commentary = st.text_area("Add your notes and observations here...", height=200, key=f"commentary_{alert_id}")
-            
+            commentary = st.text_area("Add your notes...", height=150, key=f"commentary_{alert_id}")
+
             if st.button("Generate SAR Narrative", key=f"generate_sar_{alert_id}"):
-                with st.spinner("Generating SAR narrative... This may take a moment."):
+                with st.spinner("Generating SAR narrative..."):
+                    # Use the dataframe 'df' already fetched for the graph
                     narrative = generate_sar_narrative(commentary, df)
-                    st.session_state.sar_narrative = narrative
+                    st.session_state.sar_narrative[alert_id] = narrative
             
-            if st.session_state.sar_narrative:
+            if st.session_state.sar_narrative.get(alert_id):
                 st.subheader("Generated SAR Draft")
-                narrative = st.session_state.sar_narrative
-                st.text_area("SAR Narrative", value=narrative, height=400, key=f"narrative_text_{alert_id}")
+                narrative_text = st.session_state.sar_narrative[alert_id]
+                st.text_area("SAR Narrative", value=narrative_text, height=200, key=f"narrative_text_{alert_id}")
                 
                 if st.button("Save SAR Draft", key=f"save_sar_{alert_id}"):
                     with st.spinner("Saving SAR draft..."):
-                        sar_id = store_sar_draft(alert_id, commentary, narrative)
-                        st.success(f"Successfully saved SAR Draft with ID: {sar_id}")
-                        # Clear state
-                        st.session_state.investigated_alert_id = None
-                        st.session_state.sar_narrative = None
+                        sar_id = store_sar_draft(alert_id, commentary, narrative_text)
+                        st.success(f"Saved SAR Draft: {sar_id}")
+                        # Reset state and rerun
+                        st.session_state.selected_alert_id = None
+                        st.session_state.selected_view = None
+                        del st.session_state.sar_narrative[alert_id]
                         rerun()
         else:
             st.warning(f"No graph data found for Alert ID: {alert_id}")
 
-
-with tab3:
-    st.header("SAR Review")
-    
-    st.subheader("Pending SAR Drafts")
-    
-    sar_drafts = get_sar_drafts()
-    
-    if sar_drafts:
-        # Use model_dump() for Pydantic v2
-        sar_df = pd.DataFrame([draft.model_dump() for draft in sar_drafts])
-        st.dataframe(sar_df)
-
-        sar_id_input = st.text_input("Enter SAR_Draft ID to review")
-        
-        if st.button("Review SAR", key="review_sar"):
-            st.session_state.selected_sar_id = sar_id_input
-            # Find the selected SAR draft from the list
-            selected_draft = next((draft for draft in sar_drafts if draft.id == sar_id_input), None)
-            st.session_state.selected_sar_draft = selected_draft
-
-    else:
-        st.write("No SAR drafts found.")
-
-    if st.session_state.selected_sar_id and st.session_state.selected_sar_draft:
+    elif st.session_state.selected_view == 'sar_review' and st.session_state.selected_sar_id:
         sar_id = st.session_state.selected_sar_id
-        sar_draft = st.session_state.selected_sar_draft
-        
-        st.subheader(f"Reviewing SAR Draft: {sar_id}")
-
+        st.subheader(f"Graph for SAR: {sar_id}")
         nodes, edges, df = get_graph_for_sar(sar_id)
-
         if nodes:
-            config = Config(width=1200, height=800, directed=True, physics=True, hierarchical=False, 
+            config = Config(width=800, height=600, directed=True, physics=True, hierarchical=False,
                             nodeHighlightBehavior=True, highlightColor="#F7A7A6", collapsible=True,
                             node={'labelProperty':'label'}, link={'labelProperty': 'label', 'renderLabel': True})
-            
             agraph(nodes=nodes, edges=edges, config=config)
         else:
             st.warning("Could not retrieve graph for this SAR draft.")
-        
-        st.subheader("Analyst Commentary")
-        st.text_area("Original Commentary", value=sar_draft.analyst_commentary, height=150, disabled=True, key=f"commentary_review_{sar_id}")
-        
-        st.subheader("Generated SAR Narrative")
-        st.text_area("Narrative", value=sar_draft.narrative, height=300, disabled=True, key=f"narrative_review_{sar_id}")
+    else:
+        st.info("Select an Alert or SAR from the queue to begin analysis.")
 
-        st.subheader("Decision")
-        col1, col2, _ = st.columns([1, 1, 4])
-        with col1:
-            if st.button("Accept SAR", key=f"accept_{sar_id}"):
-                update_sar_status(sar_id, "accepted")
-                st.success(f"SAR Draft {sar_id} has been accepted.")
-                st.session_state.selected_sar_id = None
-                st.session_state.selected_sar_draft = None
-                rerun()
 
-        with col2:
-            if st.button("Reject SAR", key=f"reject_{sar_id}", type="primary"):
-                update_sar_status(sar_id, "rejected")
-                st.warning(f"SAR Draft {sar_id} has been rejected.")
-                st.session_state.selected_sar_id = None
-                st.session_state.selected_sar_draft = None
-                rerun()
+# Right Panel: Contextual Details and Actions
+with right_col:
+    st.header("Details & Actions")
+
+    if st.session_state.selected_view == 'alert_analysis' and st.session_state.selected_alert_id:
+        alert_id = st.session_state.selected_alert_id
+        selected_alert = next((a for a in alerts if a.id == alert_id), None)
+
+        if selected_alert:
+            st.subheader(f"Login Location for Alert: {alert_id}")
+            map_df = pd.DataFrame({'lat': [selected_alert.latitude], 'lon': [selected_alert.longitude]})
+            st.map(map_df, zoom=11)
+
+            with st.expander("Show Detailed Transactions"):
+                st.subheader("Recent Transactions")
+                customer_id = get_customer_for_alert(alert_id)
+                if customer_id:
+                    transactions_df = get_transactions_for_customer(customer_id)
+                    if not transactions_df.empty:
+                        st.bar_chart(transactions_df[['debit', 'credit']])
+                    else:
+                        st.write("No transactions for customer.")
+
+    elif st.session_state.selected_view == 'sar_review' and st.session_state.selected_sar_id:
+        sar_id = st.session_state.selected_sar_id
+        selected_draft = next((d for d in sar_drafts if d.id == sar_id), None)
+
+        if selected_draft:
+            st.subheader(f"Reviewing SAR: {sar_id}")
+            st.text_area("Original Commentary", value=selected_draft.analyst_commentary, height=150, disabled=True)
+            st.text_area("Generated Narrative", value=selected_draft.narrative, height=300, disabled=True)
+
+    else:
+        st.info("Select an item from the queue to see details.")
