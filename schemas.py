@@ -1,5 +1,5 @@
 # schemas.py
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 # Tool 1: Get Customer and Accounts
@@ -44,8 +44,8 @@ class CustomerRingsOutput(BaseModel):
 
 
 class GenerateCypherRequest(BaseModel):
-    question: str
-    database_schema: str
+    question: str = Field(..., description="The natural language question to generate a Cypher query for")
+    database_schema: str = Field(..., description="The schema of the Neo4j database")
 
 
 # Alert Model
@@ -64,3 +64,6 @@ class SARDraftModel(BaseModel):
     created_at: str
     status: str
     analyst_commentary: str
+
+class LoadSqlCustomerToNeo4jInput(BaseModel):
+    customer_name: str = Field(..., description="The name of the customer to load from the SQL database")

@@ -105,29 +105,23 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (c:Customer {id: row.id})
-          SET c.is_pep       = row.pep,
-              c.on_watchlist = row.wl,
-              c.name = row.name
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MERGE (c:Customer {id: row.id})
+        SET c.is_pep       = row.pep,
+            c.on_watchlist = row.wl,
+            c.name = row.name
         """,
-        rows=customer_rows,
-        batch_size=batch_size
+        rows=customer_rows
     )
 
     # Companies in implicit transactions of 50 rows each
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (c:Company {id: row.id})
-          SET c.industry = row.ind,
-              c.name = row.name 
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MERGE (c:Company {id: row.id})
+        SET c.industry = row.ind,
+            c.name = row.name
         """,
-        rows=company_rows,
-        batch_size=batch_size
+        rows=company_rows
     )
 
     
@@ -225,110 +219,89 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (a:Account {id: row.acct})
-          SET a.name = row.name
-          WITH a, row
-          MATCH (c:Customer {id: row.cust})
-          MERGE (c)-[:OWNS]->(a)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MERGE (a:Account {id: row.acct})
+        SET a.name = row.name
+        WITH a, row
+        MATCH (c:Customer {id: row.cust})
+        MERGE (c)-[:OWNS]->(a)
         """,
-        rows=account_rows, batch_size=batch_size
-    )
+        rows=account_rows    )
 
     # 2.2 Employed
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MATCH (c:Customer {id: row.cust})
-          MATCH (co:Company  {id: row.co})
-          MERGE (c)-[:EMPLOYED_BY]->(co)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MATCH (c:Customer {id: row.cust})
+        MATCH (co:Company  {id: row.co})
+        MERGE (c)-[:EMPLOYED_BY]->(co)
         """,
-        rows=employed_rows, batch_size=batch_size
-    )
+        rows=employed_rows    )
 
     # 2.3 Addresses
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (a:Address {id: row.addr})
-          SET a.city = row.city,
+        MERGE (a:Address {id: row.addr})
+        SET a.city = row.city,
               a.name = row.name
-          WITH a, row
-          MATCH (c:Customer {id: row.cust})
-          MERGE (c)-[:LIVES_AT]->(a)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        WITH a, row
+        MATCH (c:Customer {id: row.cust})
+        MERGE (c)-[:LIVES_AT]->(a)
         """,
-        rows=address_rows, batch_size=batch_size
-    )
+        rows=address_rows    )
 
     # 2.4 Devices
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (d:Device {id: row.dev})
-          SET d.os = row.os,
+        MERGE (d:Device {id: row.dev})
+        SET d.os = row.os,
             d.name = row.name
-          WITH d, row
-          MATCH (c:Customer {id: row.cust})
-          MERGE (c)-[:USES_DEVICE]->(d)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        WITH d, row
+        MATCH (c:Customer {id: row.cust})
+        MERGE (c)-[:USES_DEVICE]->(d)
         """,
-        rows=device_rows, batch_size=batch_size
-    )
+        rows=device_rows    )
     # 2.5 IPs
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (i:IP_Address {id: row.ip})
-          SET i.name = row.name
-          WITH i, row
-          MATCH (d:Device {id: row.dev})
-          MERGE (d)-[:ASSOCIATED_WITH]->(i)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MERGE (i:IP_Address {id: row.ip})
+        SET i.name = row.name
+        WITH i, row
+        MATCH (d:Device {id: row.dev})
+        MERGE (d)-[:ASSOCIATED_WITH]->(i)
         """,
-        rows=ip_rows, batch_size=batch_size
-    )
+        rows=ip_rows    )
 
     # 2.6 Payment Methods
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (p:Payment_Method {id: row.pid})
-          SET p.pm_type     = row.ptype,
+        MERGE (p:Payment_Method {id: row.pid})
+        SET p.pm_type     = row.ptype,
               p.card_number = row.cnum,
               p.name = row.name
-          WITH p, row
-          MATCH (c:Customer {id: row.cust})
-          MERGE (c)-[:HAS_METHOD]->(p)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        WITH p, row
+        MATCH (c:Customer {id: row.cust})
+        MERGE (c)-[:HAS_METHOD]->(p)
         """,
-        rows=payment_rows, batch_size=batch_size
-    )
+        rows=payment_rows    )
 
     # 2.7 Transactions
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (t:Transaction {id: row.tid})
-          SET t.amount    = row.amt,
+        MERGE (t:Transaction {id: row.tid})
+        SET t.amount    = row.amt,
               t.timestamp = row.ts,
               t.name = row.name
-          WITH t, row
-          MATCH (a1:Account {id: row.src})
-          MATCH (a2:Account {id: row.dst})
-          MERGE (a1)-[:FROM]->(t)-[:TO]->(a2)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        WITH t, row
+        MATCH (a1:Account {id: row.src})
+        MATCH (a2:Account {id: row.dst})
+        MERGE (a1)-[:FROM]->(t)-[:TO]->(a2)
         """,
-        rows=transaction_rows, batch_size=batch_size
-    )
+        rows=transaction_rows    )
 
 end_time = time.perf_counter()
 elapsed = end_time - start_time
@@ -366,13 +339,11 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (a:Account {id: row.acct})
-          SET a.name = row.name
-          WITH a, row
-          MATCH (c:Customer {id: row.cust})
-          MERGE (c)-[:OWNS]->(a)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MERGE (a:Account {id: row.acct})
+        SET a.name = row.name
+        WITH a, row
+        MATCH (c:Customer {id: row.cust})
+        MERGE (c)-[:OWNS]->(a)
         """,
         rows=super_rows, batch_size=50
     )
@@ -407,13 +378,11 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (t:Transaction {id: row.tid})
-          SET t.amount = row.amount, t.timestamp = row.ts
-          WITH t, row
-          MATCH (a1:Account {id: row.src}), (a2:Account {id: row.dst})
-          MERGE (a1)-[:FROM]->(t)-[:TO]->(a2)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MERGE (t:Transaction {id: row.tid})
+        SET t.amount = row.amount, t.timestamp = row.ts
+        WITH t, row
+        MATCH (a1:Account {id: row.src}), (a2:Account {id: row.dst})
+        MERGE (a1)-[:FROM]->(t)-[:TO]->(a2)
         """,
         rows=ring_txn_rows, batch_size=50
     )
@@ -433,10 +402,8 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MATCH (c:Customer {id: row.cust}), (co:Company {id: row.co})
-          MERGE (c)-[:EMPLOYED_BY]->(co)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MATCH (c:Customer {id: row.cust}), (co:Company {id: row.co})
+        MERGE (c)-[:EMPLOYED_BY]->(co)
         """,
         rows=bridge_rows, batch_size=50
     )
@@ -460,12 +427,10 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (d:Device {id: row.dev})
-          SET d.os = 'Unknown'
-          MERGE (i:IP_Address {id: row.ip})
-          MERGE (d)-[:ASSOCIATED_WITH]->(i)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MERGE (d:Device {id: row.dev})
+        SET d.os = 'Unknown'
+        MERGE (i:IP_Address {id: row.ip})
+        MERGE (d)-[:ASSOCIATED_WITH]->(i)
         """,
         rows=isolate_rows, batch_size=50
     )
@@ -497,10 +462,8 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MATCH (c:Customer {id: row.cust}), (a:Address {id: row.addr})
-          MERGE (c)-[:LIVES_AT]->(a)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MATCH (c:Customer {id: row.cust}), (a:Address {id: row.addr})
+        MERGE (c)-[:LIVES_AT]->(a)
         """,
         rows=dense_addr_rows, batch_size=50
     )
@@ -508,11 +471,9 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MATCH (c:Customer {id: row.cust}), (p:Payment_Method {id: row.pm})
-          MERGE (c)-[:HAS_METHOD]->(p)
-          SET c.on_watchlist = true
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MATCH (c:Customer {id: row.cust}), (p:Payment_Method {id: row.pm})
+        MERGE (c)-[:HAS_METHOD]->(p)
+        SET c.on_watchlist = true
         """,
         rows=dense_pm_rows, batch_size=50
     )
@@ -563,31 +524,25 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (c:Customer {id: row.id})
-          SET c.is_pep       = row.pep,
+        MERGE (c:Customer {id: row.id})
+        SET c.is_pep       = row.pep,
               c.on_watchlist = row.wl,
               c.name = row.name
-        } IN TRANSACTIONS OF $batch_size ROWS
         """,
         rows=velocity_customers_rows,
-        batch_size=batch_size
     )
 
     # Create velocity accounts and link to customers
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (a:Account {id: row.acct})
-          SET a.name = row.name
-          WITH a, row
-          MATCH (c:Customer {id: row.cust})
-          MERGE (c)-[:OWNS]->(a)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MERGE (a:Account {id: row.acct})
+        SET a.name = row.name
+        WITH a, row
+        MATCH (c:Customer {id: row.cust})
+        MERGE (c)-[:OWNS]->(a)
         """,
-        rows=velocity_accounts_rows, batch_size=batch_size
-    )
+        rows=velocity_accounts_rows    )
     
     # Create phone number and link to customers
     sess.run("MERGE (p:PhoneNumber {id: $phone_id, name: $phone_id})", phone_id=shared_phone_number)
@@ -595,14 +550,11 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MATCH (c:Customer {id: row.cust})
-          MATCH (p:PhoneNumber {id: row.phone})
-          MERGE (c)-[:HAS_PHONE]->(p)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        MATCH (c:Customer {id: row.cust})
+        MATCH (p:PhoneNumber {id: row.phone})
+        MERGE (c)-[:HAS_PHONE]->(p)
         """,
-        rows=velocity_phone_rows, batch_size=batch_size
-    )
+        rows=velocity_phone_rows    )
 
 end_time = time.perf_counter()
 elapsed = end_time - start_time
@@ -614,8 +566,8 @@ def detect_and_create_velocity_alerts():
     print("Detecting velocity patterns and creating alerts...")
     with get_session() as session:
         result = session.run("""
-            MATCH (p:PhoneNumber)<-[r:HAS_PHONE]-(c:Customer)
-            WITH p, count(c) as customer_count, collect(c.id) as customer_ids
+          MATCH (p:PhoneNumber)<-[r:HAS_PHONE]-(c:Customer)
+          WITH p, count(c) as customer_count, collect(c.id) as customer_ids
             WHERE customer_count > 50
             OPTIONAL MATCH (alert:Alert {related_entity_id: p.id})
             WHERE alert IS NULL
@@ -638,7 +590,7 @@ def detect_and_create_velocity_alerts():
             customer_to_link = customer_ids[0]
 
             session.run("""
-                MATCH (c:Customer {id: $customer_id})
+              MATCH (c:Customer {id: $customer_id})
                 CREATE (a:Alert {
                     id: $alert_id,
                     description: $description,
@@ -648,7 +600,7 @@ def detect_and_create_velocity_alerts():
                     status: 'new',
                     related_entity_id: $phone_id
                 })
-                MERGE (c)-[:HAS_ALERT]->(a)
+              MERGE (c)-[:HAS_ALERT]->(a)
             """, alert_id=alert_id, description=description, 
                  timestamp=datetime.now().isoformat(),
                  latitude=london_lat + random.uniform(-0.05, 0.05),
@@ -685,17 +637,15 @@ with get_session() as sess:
     sess.run(
         """
         UNWIND $rows AS row
-        CALL (row) {
-          MERGE (a:Alert {id: row.alert_id})
-          SET a.description = row.description,
+        MERGE (a:Alert {id: row.alert_id})
+        SET a.description = row.description,
               a.timestamp = row.timestamp,
               a.latitude = row.latitude,
               a.longitude = row.longitude,
               a.status = row.status
-          WITH a, row
-          MATCH (c:Customer {id: row.cust})
-          MERGE (c)-[:HAS_ALERT]->(a)
-        } IN TRANSACTIONS OF $batch_size ROWS
+        WITH a, row
+        MATCH (c:Customer {id: row.cust})
+        MERGE (c)-[:HAS_ALERT]->(a)
         """,
         rows=alert_rows, batch_size=50
     )

@@ -1,12 +1,33 @@
 services:
   neo4j:
-    image: neo4j:2025.05.0
-    #volumes:         
+    image: neo4j:5.20.0
+    #volumes:
     #    - ./data:/data
     environment:
         - NEO4J_AUTH=neo4j/password
-        - NEO4J_PLUGINS= ["apoc"]
+        - NEO4J_PLUGINS=["apoc"]
     ports:
       - "7474:7474"
       - "7687:7687"
     restart: always
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: kyc_database
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  genai_toolbox:
+    image: local-genai-toolbox
+    command: ["--tools-file", "/app/tools.yaml"]
+    volumes:
+      - ./tools.yaml:/app/tools.yaml
+    ports:
+      - "5000:5000"
+    depends_on:
+      - postgres

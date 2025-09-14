@@ -101,6 +101,11 @@ def get_graph_for_alert(alert_id):
                 
                 properties = dict(node)
                 
+                # Convert Neo4j DateTime objects to ISO strings for DataFrame compatibility
+                for key, value in properties.items():
+                    if hasattr(value, 'isoformat'):  # Neo4j DateTime objects
+                        properties[key] = value.isoformat()
+                
                 # Use a display name for the node label, fallback to id
                 display_label = properties.get('name', properties.get('id', node_id))
                 nodes.append(Node(id=node_id, label=str(display_label), size=15, shape="dot"))
@@ -216,6 +221,12 @@ def get_graph_for_sar(sar_id):
                 node_ids.add(node_id)
                 labels = list(node.labels)
                 properties = dict(node)
+                
+                # Convert Neo4j DateTime objects to ISO strings for DataFrame compatibility
+                for key, value in properties.items():
+                    if hasattr(value, 'isoformat'):  # Neo4j DateTime objects
+                        properties[key] = value.isoformat()
+                
                 display_label = properties.get('name', properties.get('id', node_id))
                 
                 # Exclude the SAR_Draft node itself from the visualization

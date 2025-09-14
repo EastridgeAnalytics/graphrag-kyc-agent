@@ -1,12 +1,20 @@
 import streamlit as st
 import pandas as pd
 import pydeck as pdk
+import os
+from dotenv import load_dotenv
+
+# Load environment variables first
+load_dotenv()
+
 from aml_workbench_utils import (
     get_alerts, get_transactions_for_customer, get_customer_for_alert, 
     get_graph_for_alert, generate_sar_narrative, store_sar_draft,
     get_sar_drafts, get_graph_for_sar, update_sar_status
 )
 from streamlit_agraph import agraph, Node, Edge, Config
+from kyc_agent import init_agent, run_agent, cleanup_agent
+import asyncio
 
 
 st.set_page_config(layout="wide")
@@ -23,19 +31,36 @@ if 'selected_view' not in st.session_state:
 # Robustly initialize sar_narrative as a dictionary to prevent errors
 if 'sar_narrative' not in st.session_state or st.session_state.sar_narrative is None:
     st.session_state.sar_narrative = {}
+# Force clear the agent to ensure fresh initialization with new config
+st.session_state.kyc_agent = None
+if 'conversation_history' not in st.session_state:
+    st.session_state.conversation_history = []
 
 
 def rerun():
     # Preserve selection across reruns if needed, or clear state
-    st.experimental_rerun()
+    st.rerun()
+
+# --- Agent Initialization ---
+async def initialize_agent():
+    if st.session_state.kyc_agent is None:
+        st.session_state.kyc_agent = await init_agent()
+
+# Run the async function to initialize the agent
+try:
+    asyncio.run(initialize_agent())
+except Exception as e:
+    st.error(f"Failed to initialize KYC agent: {e}")
+
 
 # Main layout with three columns
 left_col, main_col, right_col = st.columns([1, 2.5, 1.5])
 
-# Left Panel: Investigation Queue
+# Left Panel: Investigation Queue & Agent Chat
 with left_col:
-    st.header("Investigation Queue")
-
+    st.header("Investigation Tools")
+    
+    # Investigation Queue only (KYC Copilot moved to Analysis Canvas)
     # --- Alerts Section ---
     st.subheader("New Alerts")
     alerts = get_alerts()
@@ -163,30 +188,109 @@ with main_col:
             with entities_tab:
                 st.dataframe(df, use_container_width=True)
 
-            # Analyst Commentary and SAR generation under the graph
-            st.subheader("Analyst Commentary")
-            commentary = st.text_area("Add your notes...", height=150, key=f"commentary_{alert_id}")
-
-            if st.button("Generate SAR Narrative", key=f"generate_sar_{alert_id}"):
-                with st.spinner("Generating SAR narrative..."):
-                    # Use the dataframe 'df' already fetched for the graph
-                    narrative = generate_sar_narrative(commentary, df)
-                    st.session_state.sar_narrative[alert_id] = narrative
+            # Create tabs for Analyst Commentary and KYC Copilot
+            commentary_tab, copilot_tab = st.tabs(["Analyst Commentary", "🤖 KYC Copilot"])
             
-            if st.session_state.sar_narrative.get(alert_id):
-                st.subheader("Generated SAR Draft")
-                narrative_text = st.session_state.sar_narrative[alert_id]
-                st.text_area("SAR Narrative", value=narrative_text, height=200, key=f"narrative_text_{alert_id}")
+            with commentary_tab:
+                commentary = st.text_area("Add your notes...", height=150, key=f"commentary_{alert_id}")
                 
-                if st.button("Save SAR Draft", key=f"save_sar_{alert_id}"):
-                    with st.spinner("Saving SAR draft..."):
-                        sar_id = store_sar_draft(alert_id, commentary, narrative_text)
+                if st.button("Generate SAR Narrative", key=f"generate_sar_{alert_id}"):
+                    with st.spinner("Generating SAR narrative..."):
+                        # Use the dataframe 'df' already fetched for the graph
+                        narrative = generate_sar_narrative(commentary, df)
+                        st.session_state.sar_narrative[alert_id] = narrative
+                
+                if st.session_state.sar_narrative.get(alert_id):
+                    st.subheader("Generated SAR Draft")
+                    st.text_area("SAR Narrative", st.session_state.sar_narrative[alert_id], height=200, disabled=True)
+                    
+                    if st.button("Save SAR Draft", key=f"save_sar_{alert_id}"):
+                        sar_id = store_sar_draft(alert_id, commentary, st.session_state.sar_narrative[alert_id])
                         st.success(f"Saved SAR Draft: {sar_id}")
-                        # Reset state and rerun
+                        # Clear the SAR narrative and reset state
+                        del st.session_state.sar_narrative[alert_id]
                         st.session_state.selected_alert_id = None
                         st.session_state.selected_view = None
-                        del st.session_state.sar_narrative[alert_id]
                         rerun()
+            
+            with copilot_tab:
+                # Initialize conversation history for this alert if not exists
+                if f"conversation_{alert_id}" not in st.session_state:
+                    st.session_state[f"conversation_{alert_id}"] = []
+                
+                # Create a container for the chat history to make it scrollable
+                chat_container = st.container(height=400)
+                
+                # Display chat messages within the container
+                with chat_container:
+                    for message in st.session_state[f"conversation_{alert_id}"]:
+                        with st.chat_message(message["role"]):
+                            st.markdown(message["content"])
+                
+                # Chat input
+                if prompt := st.chat_input("Ask the KYC agent about this alert...", key=f"chat_{alert_id}"):
+                    # Add user message to chat history immediately for better UX
+                    st.session_state[f"conversation_{alert_id}"].append({"role": "user", "content": prompt})
+
+                    # Rerun to display the new user message inside the container
+                    st.rerun()
+
+                # This part needs to be outside the initial chat input check to run after the rerun
+                # Check if there's a new user message to process
+                if (f"conversation_{alert_id}" in st.session_state and 
+                    st.session_state[f"conversation_{alert_id}"] and
+                    st.session_state[f"conversation_{alert_id}"][-1]["role"] == "user"):
+                    
+                    # Get the latest user prompt
+                    last_message = st.session_state[f"conversation_{alert_id}"][-1]
+                    prompt = last_message["content"]
+
+                    # Get AI response
+                    with st.spinner("Analyzing..."):
+                        # Ensure agent is initialized
+                        if 'kyc_agent' not in st.session_state or st.session_state.kyc_agent is None:
+                            try:
+                                # Check if OPENAI_API_KEY is available
+                                if not os.getenv("OPENAI_API_KEY"):
+                                    st.error("⚠️ OpenAI API Key is missing! Please add OPENAI_API_KEY to your .env file to use the KYC Copilot.")
+                                    st.stop()
+                                
+                                st.session_state.kyc_agent = asyncio.run(init_agent())
+                            except Exception as e:
+                                st.error(f"Failed to initialize agent: {str(e)}")
+                                st.stop()
+                        
+                        try:
+                            # Create a context-aware query for the alert
+                            context_query = f"Analyzing Alert {alert_id}: {prompt}"
+                            
+                            # Pass the conversation history (excluding the last user message which is the current prompt)
+                            history = st.session_state[f"conversation_{alert_id}"][:-1]
+                            
+                            response = asyncio.run(run_agent(
+                                st.session_state.kyc_agent, 
+                                context_query, 
+                                history
+                            ))
+                            
+                            if response and response.strip():
+                                # Add assistant response to chat history
+                                st.session_state[f"conversation_{alert_id}"].append({"role": "assistant", "content": response})
+                            else:
+                                st.session_state[f"conversation_{alert_id}"].append({"role": "assistant", "content": "The agent didn't provide a response. Please try again."})
+                                
+                        except Exception as e:
+                            import traceback
+                            error_details = traceback.format_exc()
+                            error_msg = f"Agent Error: {str(e)}"
+                            st.error(error_msg)
+                            
+                            # Add error to history
+                            st.session_state[f"conversation_{alert_id}"].append({"role": "assistant", "content": f"I encountered an error: {str(e)}."})
+                    
+                    # Rerun to display the assistant's response
+                    st.rerun()
+
         else:
             st.warning(f"No graph data found for Alert ID: {alert_id}")
 
