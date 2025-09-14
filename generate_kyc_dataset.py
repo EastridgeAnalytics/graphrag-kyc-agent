@@ -44,7 +44,7 @@ def get_session():
 with get_session() as sess:
     
     for label in ('Customer','Account','Company','Address',
-                  'Device','IP_Address','Payment_Method','Transaction','Alert','SAR_Draft'):
+                  'Device','IP_Address','Payment_Method','Transaction','Alert','SAR_Draft','PhoneNumber'):
         sess.execute_write(
             lambda tx, L=label: tx.run(
                 f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{L}) REQUIRE n.id IS UNIQUE"
@@ -521,7 +521,142 @@ with get_session() as sess:
     print(f"⌛ Loading Anomalies: Dense clusters - Around shared address & payment method took {elapsed:.2f} seconds")
 
 
+# ———————————————
+# 5.5 Generate Velocity Attack Data
+# ———————————————
+print("Generating velocity attack data...")
+start_time = time.perf_counter()
+
+# A single phone number used for all new accounts
+shared_phone_number = "PHONE_VELOCITY_1"
+
+# 100 new customers and accounts
+n_velocity_customers = 100
+velocity_customers_rows = []
+velocity_accounts_rows = []
+velocity_phone_rows = []
+
+for i in range(n_velocity_customers):
+    cust_id = f"CUST_V_{i:03d}"
+    acct_id = f"ACCT_V_{i:03d}"
+    
+    velocity_customers_rows.append({
+        "id": cust_id,
+        "pep": False,
+        "wl": True, # on watchlist
+        "name": cust_id
+    })
+    
+    velocity_accounts_rows.append({
+        "cust": cust_id,
+        "acct": acct_id,
+        "name": acct_id
+    })
+    
+    velocity_phone_rows.append({
+        "cust": cust_id,
+        "phone": shared_phone_number
+    })
+
+with get_session() as sess:
+    # Create velocity customers
+    sess.run(
+        """
+        UNWIND $rows AS row
+        CALL (row) {
+          MERGE (c:Customer {id: row.id})
+          SET c.is_pep       = row.pep,
+              c.on_watchlist = row.wl,
+              c.name = row.name
+        } IN TRANSACTIONS OF $batch_size ROWS
+        """,
+        rows=velocity_customers_rows,
+        batch_size=batch_size
+    )
+
+    # Create velocity accounts and link to customers
+    sess.run(
+        """
+        UNWIND $rows AS row
+        CALL (row) {
+          MERGE (a:Account {id: row.acct})
+          SET a.name = row.name
+          WITH a, row
+          MATCH (c:Customer {id: row.cust})
+          MERGE (c)-[:OWNS]->(a)
+        } IN TRANSACTIONS OF $batch_size ROWS
+        """,
+        rows=velocity_accounts_rows, batch_size=batch_size
+    )
+    
+    # Create phone number and link to customers
+    sess.run("MERGE (p:PhoneNumber {id: $phone_id, name: $phone_id})", phone_id=shared_phone_number)
+    
+    sess.run(
+        """
+        UNWIND $rows AS row
+        CALL (row) {
+          MATCH (c:Customer {id: row.cust})
+          MATCH (p:PhoneNumber {id: row.phone})
+          MERGE (c)-[:HAS_PHONE]->(p)
+        } IN TRANSACTIONS OF $batch_size ROWS
+        """,
+        rows=velocity_phone_rows, batch_size=batch_size
+    )
+
+end_time = time.perf_counter()
+elapsed = end_time - start_time
+print(f"⌛ Loading Velocity Attack Data took {elapsed:.2f} seconds")
+
+
 # 6. Generate Alerts
+def detect_and_create_velocity_alerts():
+    print("Detecting velocity patterns and creating alerts...")
+    with get_session() as session:
+        result = session.run("""
+            MATCH (p:PhoneNumber)<-[r:HAS_PHONE]-(c:Customer)
+            WITH p, count(c) as customer_count, collect(c.id) as customer_ids
+            WHERE customer_count > 50
+            OPTIONAL MATCH (alert:Alert {related_entity_id: p.id})
+            WHERE alert IS NULL
+            RETURN p.id as phone_id, customer_count, customer_ids
+        """)
+        
+        records = result.data()
+        for record in records:
+            phone_id = record['phone_id']
+            customer_count = record['customer_count']
+            customer_ids = record['customer_ids']
+            
+            alert_id = f"ALERT_VEL_{uuid.uuid4().hex[:4].upper()}"
+            description = f"Velocity attack detected: phone number {phone_id} linked to {customer_count} customers."
+            
+            london_lat = 51.5074
+            london_lon = -0.1278
+            
+            # Link the alert to the first customer in the group
+            customer_to_link = customer_ids[0]
+
+            session.run("""
+                MATCH (c:Customer {id: $customer_id})
+                CREATE (a:Alert {
+                    id: $alert_id,
+                    description: $description,
+                    timestamp: $timestamp,
+                    latitude: $latitude,
+                    longitude: $longitude,
+                    status: 'new',
+                    related_entity_id: $phone_id
+                })
+                MERGE (c)-[:HAS_ALERT]->(a)
+            """, alert_id=alert_id, description=description, 
+                 timestamp=datetime.now().isoformat(),
+                 latitude=london_lat + random.uniform(-0.05, 0.05),
+                 longitude=london_lon + random.uniform(-0.05, 0.05),
+                 phone_id=phone_id,
+                 customer_id=customer_to_link)
+            print(f"  Created alert {alert_id} for phone {phone_id}")
+
 n_alerts = 100
 alert_rows = []
 alert_counter = 0
@@ -567,3 +702,5 @@ with get_session() as sess:
     end_time = time.perf_counter()
     elapsed = end_time - start_time
     print(f"⌛ Loading Alerts took {elapsed:.2f} seconds")
+
+detect_and_create_velocity_alerts()
