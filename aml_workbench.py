@@ -17,11 +17,29 @@ from kyc_agent import init_agent, run_agent, cleanup_agent
 import asyncio
 
 
-st.set_page_config(layout="wide")
+# Set page config
+st.set_page_config(page_title="AML Analyst Workbench", layout="wide")
+
+# Add a sidebar for data source configuration
+with st.sidebar:
+    st.header("🔗 Data Source Connections")
+    st.info("Enable connections to external data sources for the agent.")
+    
+    # Checkbox state is managed by session_state
+    use_genai_toolbox = st.checkbox(
+        "Enable PostgreSQL Database",
+        key='use_genai_toolbox', # Use key to bind to session_state
+        help="Connects to the PostgreSQL customer database via GenAI Toolbox."
+    )
+
+    st.caption("Changes will apply on the next conversation turn.")
+    st.image("https://dist.neo4j.com/wp-content/uploads/20210617085700/neo4j-logo-2021.svg", width=150)
 
 st.title("AML Analyst Workbench")
 
 # Initialize session state
+if 'selected_alert_ids' not in st.session_state:
+    st.session_state.selected_alert_ids = []
 if 'selected_alert_id' not in st.session_state:
     st.session_state.selected_alert_id = None
 if 'selected_sar_id' not in st.session_state:
@@ -71,47 +89,64 @@ with left_col:
         for alert in alerts:
             customer_id = get_customer_for_alert(alert.id)
             transactions_df = get_transactions_for_customer(customer_id)
-            # Combine debit and credit for the chart, or use an empty list
+            transaction_history = []
             if not transactions_df.empty:
-                # Using max to represent activity, could be sum() or other logic
                 transaction_history = (transactions_df['debit'] + transactions_df['credit']).tolist()
-            else:
-                transaction_history = []
 
             alert_dict = alert.model_dump()
             alert_dict['transaction_history'] = transaction_history
             alerts_data.append(alert_dict)
         
         alert_df = pd.DataFrame(alerts_data)
-        # Add a selection column
-        alert_df.insert(0, "select", False)
+        
+        # Store original df in session state to compare against edits
+        st.session_state.original_alert_df = alert_df.copy()
 
-        # Use st.data_editor to make a clickable dataframe
         edited_df = st.data_editor(
-            alert_df[['select', 'id', 'description', 'transaction_history']],
+            alert_df[['id', 'description', 'status', 'transaction_history']],
             hide_index=True,
             use_container_width=True,
             column_config={
-                "select": st.column_config.CheckboxColumn(required=True),
+                "status": st.column_config.SelectboxColumn(
+                    "Status",
+                    options=["new", "under_review", "closed", "escalated"],
+                    required=True,
+                ),
                 "transaction_history": st.column_config.BarChartColumn(
                     "Recent Transactions",
                     y_min=0,
                 ),
             },
-            disabled=alert_df.columns.drop("select"),
-            key="alert_editor"
+            disabled=['id', 'description', 'transaction_history'],
+            key="alert_editor_inline"
         )
 
-        # Find the selected row
-        selected_row = edited_df[edited_df.select]
-        if not selected_row.empty:
-            selected_alert_id = selected_row.iloc[0]['id']
-            # If selection changed, update state and rerun
-            if st.session_state.selected_alert_id != selected_alert_id:
-                st.session_state.selected_alert_id = selected_alert_id
-                st.session_state.selected_sar_id = None
-                st.session_state.selected_view = 'alert_analysis'
-                # No rerun here, let the script continue and redraw the other elements
+        # Compare the edited dataframe with the original to find changes
+        if not st.session_state.original_alert_df.equals(edited_df):
+            # Find changed rows by comparing status columns
+            diff = st.session_state.original_alert_df['status'] != edited_df['status']
+            if diff.any():
+                changed_rows = edited_df[diff]
+                with st.spinner(f"Updating {len(changed_rows)} alert(s)..."):
+                    for _, row in changed_rows.iterrows():
+                        alert_id = row['id']
+                        new_status = row['status']
+                        try:
+                            # Direct DB call to update status
+                            from neo4j import GraphDatabase
+                            NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+                            NEO4J_USER = os.getenv("NEO4J_USERNAME", "neo4j")
+                            NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+                            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+                            
+                            with driver.session() as session:
+                                session.run("MATCH (a:Alert {id: $id}) SET a.status = $status", id=alert_id, status=new_status)
+                            st.toast(f"Updated alert {alert_id} to {new_status}")
+                        except Exception as e:
+                            st.error(f"Failed to update alert {alert_id}: {e}")
+                
+                # Rerun to refresh the view with updated data
+                st.rerun()
 
     else:
         st.info("No new alerts.")
@@ -219,7 +254,7 @@ with main_col:
                     st.session_state[f"conversation_{alert_id}"] = []
                 
                 # Create a container for the chat history to make it scrollable
-                chat_container = st.container(height=400)
+                chat_container = st.container(height=200)
                 
                 # Display chat messages within the container
                 with chat_container:
@@ -247,15 +282,25 @@ with main_col:
 
                     # Get AI response
                     with st.spinner("Analyzing..."):
-                        # Ensure agent is initialized
-                        if 'kyc_agent' not in st.session_state or st.session_state.kyc_agent is None:
+                        # --- Agent Initialization Logic ---
+                        # Get the current data source config from the sidebar
+                        current_config = {'use_genai_toolbox': st.session_state.get('use_genai_toolbox', False)}
+
+                        # Re-initialize the agent if it doesn't exist or if the config has changed
+                        if ('kyc_agent' not in st.session_state or 
+                            st.session_state.kyc_agent is None or
+                            st.session_state.get('agent_config') != current_config):
+                            
                             try:
-                                # Check if OPENAI_API_KEY is available
                                 if not os.getenv("OPENAI_API_KEY"):
-                                    st.error("⚠️ OpenAI API Key is missing! Please add OPENAI_API_KEY to your .env file to use the KYC Copilot.")
+                                    st.error("⚠️ OpenAI API Key is missing! Please add it to your .env file.")
                                     st.stop()
                                 
-                                st.session_state.kyc_agent = asyncio.run(init_agent())
+                                with st.spinner("Initializing KYC Agent with new settings..."):
+                                    st.session_state.kyc_agent = asyncio.run(init_agent(use_genai_toolbox=current_config['use_genai_toolbox']))
+                                    st.session_state.agent_config = current_config # Store the config used
+                                st.toast(f"Agent re-initialized!")
+
                             except Exception as e:
                                 st.error(f"Failed to initialize agent: {str(e)}")
                                 st.stop()

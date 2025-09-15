@@ -11,10 +11,20 @@ from ollama import chat
 import logging
 from neo4j.time import DateTime, Date, Time, Duration
 import json
+import httpx
+
+# New Input Schema for the new tool
+class UpdateAlertStatusInput(BaseModel):
+    alert_id: str = Field(..., description="The ID of the alert to update.")
+    status: str = Field(..., description="The new status for the alert (e.g., 'under_review', 'closed', 'forwarded').")
 
 # New Input Schema for the new tool
 class LoadSqlCustomerToNeo4jInput(BaseModel):
     customer_name: str = Field(..., description="The name of the customer to load from SQL database to Neo4j.")
+
+# New Input Schema for the new tool
+class SearchSqlCustomerInput(BaseModel):
+    name: str = Field(..., description="The name of the customer to search for in the SQL database.")
 
 # Configure logging
 logging.basicConfig(
@@ -218,6 +228,35 @@ def create_memory(content: str, customer_ids: list[str] = [], account_ids: list[
        
         return f"Created memory: {str(result)}"
 
+# Tool to update alert status
+@function_tool
+def update_alert_status(input: UpdateAlertStatusInput) -> str:
+    """
+    Updates the status of a specific alert in the knowledge graph.
+    Use this to reflect the progress of an investigation, for example,
+    marking an alert as 'under_review' when you start looking into it,
+    or 'closed' when the investigation is complete.
+    """
+    logger.info(f"TOOL: UPDATE_ALERT_STATUS - Alert ID: {input.alert_id}, New Status: {input.status}")
+    
+    cypher_query = """
+    MATCH (a:Alert {id: $alert_id})
+    SET a.status = $status
+    RETURN a.id as alert_id, a.status as new_status
+    """
+    
+    print("🔍 **Cypher Query Executed:**")
+    print(f"```cypher\n{cypher_query.strip()}\n```")
+    print(f"**Parameters:** alert_id='{input.alert_id}', status='{input.status}'")
+    
+    with driver.session() as session:
+        result = session.run(cypher_query, alert_id=input.alert_id, status=input.status)
+        record = result.single()
+        if record:
+            return f"Successfully updated status for alert '{record['alert_id']}' to '{record['new_status']}'."
+        else:
+            return f"Failed to update alert '{input.alert_id}'. It might not exist in the database."
+
 # Tool to load customer from SQL to Neo4j
 @function_tool
 def load_sql_customer_to_neo4j(input: LoadSqlCustomerToNeo4jInput) -> str:
@@ -286,25 +325,28 @@ def generate_cypher(request: GenerateCypherRequest) -> str:
     schema = """
     Node properties are the following:
     - Customer {id: STRING, name: STRING, is_pep: BOOLEAN, on_watchlist: BOOLEAN}
-    - Account {id: STRING}
-    - Transaction {id: STRING, amount: FLOAT, timestamp: DATETIME}
-    - Device {id: STRING}
-    - Alert {id: STRING}
+    - Account {id: STRING, name: STRING}
+    - Company {id: STRING, name: STRING, industry: STRING}
+    - Address {id: STRING, name: STRING, city: STRING}
+    - Device {id: STRING, name: STRING, os: STRING}
+    - IP_Address {id: STRING, name: STRING}
+    - Payment_Method {id: STRING, name: STRING, pm_type: STRING, card_number: STRING}
+    - Transaction {id: STRING, name: STRING, amount: FLOAT, timestamp: STRING}
+    - Alert {id: STRING, description: STRING, timestamp: STRING, latitude: FLOAT, longitude: FLOAT, status: STRING, related_entity_id: STRING}
+    - SAR_Draft {id: STRING}
+    - PhoneNumber {id: STRING, name: STRING}
     - Memory {content: STRING, created_at: DATETIME}
-    - Company {id: STRING, name: STRING}
-    - Address {id: STRING, location: POINT}
-    - IP {id: STRING}
 
     The relationships are the following:
     - (:Customer)-[:OWNS]->(:Account)
-    - (:Account)-[:TO]->(:Transaction)
-    - (:Account)-[:FROM]->(:Transaction)
-    - (:Transaction)-[:TRIGGERED_BY]->(:Alert)
-    - (:Device)-[:USED_BY]->(:Customer)
-    - (:Transaction)-[:INITIATED_BY]->(:Device)
-    - (:Customer)-[:HAS_IP]->(:IP)
-    - (:Customer)-[:HAS_ADDRESS]->(:Address)
-    - (:Customer)-[:WORKS_FOR]->(:Company)
+    - (:Customer)-[:EMPLOYED_BY]->(:Company)
+    - (:Customer)-[:LIVES_AT]->(:Address)
+    - (:Customer)-[:USES_DEVICE]->(:Device)
+    - (:Device)-[:ASSOCIATED_WITH]->(:IP_Address)
+    - (:Customer)-[:HAS_METHOD]->(:Payment_Method)
+    - (:Account)-[:FROM]->(:Transaction)-[:TO]->(:Account)
+    - (:Customer)-[:HAS_PHONE]->(:PhoneNumber)
+    - (:Customer)-[:HAS_ALERT]->(:Alert)
     - (:Memory)-[:FOR_CUSTOMER]->(:Customer)
     - (:Memory)-[:FOR_ACCOUNT]->(:Account)
     - (:Memory)-[:FOR_TRANSACTION]->(:Transaction)
@@ -394,13 +436,49 @@ def execute_cypher(query: str) -> str:
         print(f"❌ **Cypher Execution Failed:**\n{error_message}")
         return error_message
         
-# Agent initialization and cleanup
-async def init_agent():
-    # For now, let's create the agent without MCP servers to avoid connection issues
-    # This will use only the local tools which should be sufficient for basic functionality
-    logger.info("Creating KYC agent with local tools only (MCP temporarily disabled)")
+@function_tool
+def search_sql_customer_by_name(input: SearchSqlCustomerInput) -> str:
+    """
+    Search for customers by name in the external SQL database.
+    Use this tool to find customer information that might not be in the graph database.
+    """
+    logger.info(f"TOOL: SEARCH_SQL_CUSTOMER_BY_NAME - Name: {input.name}")
     
-    instructions = """You are an expert KYC analyst. Your primary goal is to investigate alerts and answer questions by retrieving and analyzing data from a Neo4j knowledge graph.
+    # The genai-toolbox server is running on localhost:5000 from docker-compose
+    url = "http://localhost:5000/tools/search-customers-by-name:call"
+    payload = {"args": {"name": input.name}}
+    
+    try:
+        with httpx.Client() as client:
+            response = client.post(url, json=payload, timeout=10.0)
+            response.raise_for_status() # Raise an exception for bad status codes
+            
+        result = response.json()
+        # The result from genai-toolbox is a list of dictionaries.
+        # We should format it nicely for the agent.
+        if "returns" in result and result["returns"]:
+            return json.dumps(result["returns"], indent=2)
+        else:
+            return "No customers found with that name in the SQL database."
+    except httpx.ConnectError:
+        error_msg = "Error: Could not connect to the GenAI Toolbox server at http://localhost:5000. Please ensure the 'genai_toolbox' Docker container is running."
+        logger.error(error_msg)
+        return error_msg
+    except httpx.RequestError as e:
+        error_msg = f"Error connecting to the GenAI Toolbox server: {e}"
+        logger.error(error_msg)
+        return error_msg
+    except Exception as e:
+        error_msg = f"An unexpected error occurred while querying the SQL database: {e}"
+        logger.error(error_msg)
+        return error_msg
+
+# Agent initialization and cleanup
+async def init_agent(use_genai_toolbox: bool = False):
+    # This will use only the local tools which should be sufficient for basic functionality
+    logger.info(f"Initializing KYC agent with GenAI Toolbox enabled: {use_genai_toolbox}")
+    
+    base_instructions = """You are an expert KYC analyst. Your primary goal is to investigate alerts and answer questions by retrieving and analyzing data from a Neo4j knowledge graph.
 
     **CRITICAL INSTRUCTIONS:**
     1.  **Be proactive.** Do not ask for permission to run tools. Formulate a plan, execute the necessary tools, and present your findings directly.
@@ -415,29 +493,40 @@ async def init_agent():
     - find_customer_rings: Find suspicious circular transaction patterns involving high-risk customers.
     - create_memory: Create memory nodes to store analysis findings.
     - load_sql_customer_to_neo4j: Load customer data from an external SQL source.
+    - update_alert_status: Update the status of an alert (e.g., 'new', 'under_review', 'closed').
     - get_customer_info: Get detailed information for a specific customer.
     - is_customer_in_suspicious_ring: Check if a customer is part of a transaction ring.
     - is_customer_bridge: Check if a customer is employed by multiple companies.
     - is_customer_linked_to_hot_property: Check if a customer is linked to a high-risk address.
     - generate_cypher: **(Step 1 for custom questions)** Generate a Cypher query from a natural language question.
-    - execute_cypher: **(Step 2 for custom questions)** Execute a Cypher query to get data from the database.
-    """
+    - execute_cypher: **(Step 2 for custom questions)** Execute a Cypher query to get data from the database."""
+
+    tools = [
+        get_customer_and_accounts, 
+        find_customer_rings, 
+        create_memory, 
+        generate_cypher, 
+        load_sql_customer_to_neo4j,
+        update_alert_status,
+        get_customer_info,
+        is_customer_in_suspicious_ring,
+        is_customer_bridge,
+        is_customer_linked_to_hot_property,
+        execute_cypher
+    ]
+
+    # Conditionally add the new tool and update instructions
+    if use_genai_toolbox:
+        tools.append(search_sql_customer_by_name)
+        instructions = base_instructions + "\n    - search_sql_customer_by_name: Search for customers by name in the external SQL database."
+        logger.info("GenAI Toolbox (PostgreSQL) tool has been enabled.")
+    else:
+        instructions = base_instructions
 
     kyc_agent = Agent(
         name="KYC Analyst",
         instructions=instructions,
-        tools=[
-            get_customer_and_accounts, 
-            find_customer_rings, 
-            create_memory, 
-            generate_cypher, 
-            load_sql_customer_to_neo4j,
-            get_customer_info,
-            is_customer_in_suspicious_ring,
-            is_customer_bridge,
-            is_customer_linked_to_hot_property,
-            execute_cypher
-        ],
+        tools=tools,
         mcp_servers=[]  # No MCP servers for now to avoid connection issues
     )
     return kyc_agent
