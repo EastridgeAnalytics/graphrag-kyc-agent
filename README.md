@@ -147,7 +147,7 @@ Test the agent tools with these example questions:
 
 6. Velocity of transactions:
    ```
-   I'm reviewing alert 410b, and i'm wondering whats going on. why was this alert created? is there any pii linking those customers prior to these new links connected via phone?
+   I'm reviewing alert 716d, and i'm wondering whats going on. why was this alert created? is there any pii linking those customers prior to these new links connected via phone?
    ```
    This tests the `get_customer_and_accounts` tool.
 
@@ -187,3 +187,29 @@ streamlit run graphrag-kyc-agent/aml_workbench.py
 ```
 
 The application will open in your web browser, and you can start exploring the AML Analyst Workbench.
+
+
+
+--------------------------------
+
+We can absolutely connect to multiple data sources like SQLite, MongoDB, and PostgreSQL. The MCP Toolbox is specifically designed for this. It acts as a universal adapter, allowing a single agent to communicate with many different types of databases, each serving a distinct purpose.
+Why Would a Bank Need So Many Databases?
+It might seem complex, but in a large financial institution, using multiple specialized databases is not only common, it's a strategic necessity. Different databases are designed to solve different problems, and a bank's needs are incredibly diverse.
+Here’s a realistic breakdown of why a bank would use the specific databases you mentioned, and others from the diagram:
+PostgreSQL (or Cloud SQL / AlloyDB): The System of Record.
+Use Case: This is the heart of core banking. It's a relational database (SQL) that is perfect for transactional integrity. It would store the definitive records for customer profiles, account balances, and transaction ledgers. Every debit and credit is recorded here with ACID compliance, ensuring data consistency and reliability. This is your source of truth.
+MongoDB (NoSQL Document Store): The Customer 360 & Digital Experience Hub.
+Use Case: Banks have a huge amount of unstructured or semi-structured data related to each customer. MongoDB is perfect for this. It would store things like customer support chat logs, uploaded documents (like passports or utility bills for KYC), user activity logs from the mobile app, and marketing communication preferences. It’s flexible and scales well for the massive volume of interaction data.
+Neo4j (Graph Database): The Connections & Intelligence Engine.
+Use Case: This is what we are using now. It’s built to understand relationships. Its primary job is fraud detection, AML, and identifying complex networks of influence. It answers questions like "Do these 100 new 'clean skin' customers share any non-obvious connections?" or "Is this new business secretly owned by a sanctioned individual through a series of shell companies?"
+SQLite (Embedded Database): The Edge & Local Tooling.
+Use Case: SQLite is small, fast, and file-based. You wouldn't run a core banking system on it, but it's used everywhere for specific tasks. For example, a data scientist might use it on their local machine to store and analyze a small, exported dataset. A mobile application might even use an encrypted SQLite database to cache non-sensitive data locally on a user's phone for performance. In our demo, the genai-toolbox uses it to simulate a local, legacy customer database.
+BigQuery (or other Data Warehouses): The Analytics Powerhouse.
+Use Case: You can't run complex, long-running analytical queries against your live transactional database (PostgreSQL) without slowing it down. Data from PostgreSQL, MongoDB, and other sources is regularly copied into a data warehouse like BigQuery. This is where business intelligence teams run massive queries to analyze market trends, customer segmentation for marketing campaigns, and long-term risk modeling.
+In this ecosystem, an agent powered by the MCP Toolbox is incredibly powerful. When investigating an alert in the graph (Neo4j), it can instantly pivot and ask:
+
+```
+"Show me this customer's full chat history from the last 30 days" (querying MongoDB).
+"Pull the full, official transaction ledger for this account from the last 48 hours" (querying PostgreSQL).
+"Has any other customer in the bank's history ever used this combination of device ID and address?" (querying BigQuery).
+```

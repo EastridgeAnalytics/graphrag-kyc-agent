@@ -37,6 +37,14 @@ driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 def get_session():
     return driver.session(database=NEO4J_DATABASE)
 
+def clear_database():
+    print("⚠️ Clearing the database...")
+    with get_session() as session:
+        session.run("MATCH (n) DETACH DELETE n")
+    print("✅ Database cleared.")
+
+# Clear the database before generating new data
+clear_database()
 
 # ———————————————
 # 1. Create uniqueness constraints (once)
@@ -166,7 +174,7 @@ for cust in customers:
         addr_counter += 1
         aid = f"ADDR_{addr_counter:05d}"
         city = random.choice(['London','Manchester','Birmingham','Leeds'])
-        address_rows.append({"cust": cust, "addr": aid, "city": city,"name":aid})
+        address_rows.append({"cust": cust, "addr": aid, "city": city,"name":aid, "country": "UK"})
 
 # 1.4 Devices & USES_DEVICE → ASSOCIATED_WITH IP_Address
 for cust in customers:
@@ -243,7 +251,8 @@ with get_session() as sess:
         UNWIND $rows AS row
         MERGE (a:Address {id: row.addr})
         SET a.city = row.city,
-              a.name = row.name
+              a.name = row.name,
+              a.country = row.country
         WITH a, row
         MATCH (c:Customer {id: row.cust})
         MERGE (c)-[:LIVES_AT]->(a)
@@ -490,12 +499,15 @@ start_time = time.perf_counter()
 
 # A single phone number used for all new accounts
 shared_phone_number = "PHONE_VELOCITY_1"
+# A single address for all new accounts
+shared_address_velocity = "ADDR_VELOCITY_1"
 
 # 100 new customers and accounts
 n_velocity_customers = 100
 velocity_customers_rows = []
 velocity_accounts_rows = []
 velocity_phone_rows = []
+velocity_address_rows = []
 
 for i in range(n_velocity_customers):
     cust_id = f"CUST_V_{i:03d}"
@@ -517,6 +529,11 @@ for i in range(n_velocity_customers):
     velocity_phone_rows.append({
         "cust": cust_id,
         "phone": shared_phone_number
+    })
+
+    velocity_address_rows.append({
+        "cust": cust_id,
+        "addr": shared_address_velocity
     })
 
 with get_session() as sess:
@@ -555,6 +572,19 @@ with get_session() as sess:
         MERGE (c)-[:HAS_PHONE]->(p)
         """,
         rows=velocity_phone_rows    )
+    
+    # Create address and link to customers
+    sess.run("MERGE (a:Address {id: $addr_id, name: $addr_id, city: 'London', country: 'UK'})", addr_id=shared_address_velocity)
+    
+    sess.run(
+        """
+        UNWIND $rows AS row
+        MATCH (c:Customer {id: row.cust})
+        MATCH (a:Address {id: row.addr})
+        MERGE (c)-[:LIVES_AT]->(a)
+        """,
+        rows=velocity_address_rows
+    )
 
 end_time = time.perf_counter()
 elapsed = end_time - start_time

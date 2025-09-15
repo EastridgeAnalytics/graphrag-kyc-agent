@@ -327,7 +327,7 @@ def generate_cypher(request: GenerateCypherRequest) -> str:
     - Customer {id: STRING, name: STRING, is_pep: BOOLEAN, on_watchlist: BOOLEAN}
     - Account {id: STRING, name: STRING}
     - Company {id: STRING, name: STRING, industry: STRING}
-    - Address {id: STRING, name: STRING, city: STRING}
+    - Address {id: STRING, name: STRING, city: STRING, country: STRING}
     - Device {id: STRING, name: STRING, os: STRING}
     - IP_Address {id: STRING, name: STRING}
     - Payment_Method {id: STRING, name: STRING, pm_type: STRING, card_number: STRING}
@@ -353,16 +353,28 @@ def generate_cypher(request: GenerateCypherRequest) -> str:
     """
     
     USER_INSTRUCTION = f"""
-    You are an expert Neo4j developer.
-    Your task is to write a Cypher query for a given question.
-    You must not use any node labels or relationship types that are not in the schema.
-    
-    Here is the schema of the database:
+    You are an expert Neo4j Cypher query writer. 
+    Your task is to write a Cypher query for a given question based *strictly* on the provided schema and tools. 
+    You must not use any node labels or relationship types that are not in the schema or tools calls.
+   
+
+    **CRITICAL RULES:**
+    1.  **Use ONLY the provided schema and tools.** Do not invent, assume, or use any node labels, relationship types, or properties that are not explicitly listed in the schema or tools calls.
+    2.  **Pay close attention to property keys.** For example, the `Alert` node has an `id` property, not `alert_id`. The `Customer` node has an `id` property, not `customer_id`. You MUST use `id`.
+    3.  **Relationships have direction.** For example, `(:Customer)-[:HAS_ALERT]->(:Alert)`. To find the customer for an alert, you must traverse the relationship backwards, like `(a:Alert)<-[:HAS_ALERT]-(c:Customer)`.
+
+    **SCHEMA:**
+    ---
     {schema}
-    
-    Here is the question:
+    ---
+
+    **EXAMPLE:**
+    *   **Question:** "Find the customer for ALERT_0007"
+    *   **Correct Cypher Query:** `MATCH (a:Alert {{id: 'ALERT_0007'}})<-[:HAS_ALERT]-(c:Customer) RETURN c`
+
+    **USER QUESTION:**
     {request.question}
-    
+
     Write the Cypher query below:
     """
     
@@ -481,11 +493,17 @@ async def init_agent(use_genai_toolbox: bool = False):
     base_instructions = """You are an expert KYC analyst. Your primary goal is to investigate alerts and answer questions by retrieving and analyzing data from a Neo4j knowledge graph.
 
     **CRITICAL INSTRUCTIONS:**
-    1.  **Be proactive.** Do not ask for permission to run tools. Formulate a plan, execute the necessary tools, and present your findings directly.
-    2.  **Use the right tool for the job.** You have a set of specific tools for common tasks. Use them whenever possible.
-    3.  For complex or unique questions that don't fit a specific tool, you must follow this two-step process:
+    1.  **Prioritize High-Level Tools:** Before generating custom Cypher, you MUST check if any of the following specific tools can directly answer the user's question. This is more efficient and reliable.
+        - `get_customer_and_accounts`: For customer details, accounts, and recent transactions.
+        - `find_customers_in_rings`: For finding customers in suspicious transaction rings.
+        - `is_customer_in_suspicious_ring`: To check if a specific customer is in a ring.
+        - `is_customer_bridge`: To check if a customer is employed by multiple companies.
+        - `is_customer_linked_to_hot_property`: To check if a customer lives at a high-risk address.
+        - `get_customer_info`: For basic customer and account details.
+    2.  **Use Custom Cypher as a Last Resort:** Only if no specific tool can answer the question, you must follow this two-step process:
         a. First, use the `generate_cypher` tool to create a Cypher query.
         b. Second, use the `execute_cypher` tool to run the query you just generated.
+    3.  **Be proactive.** Do not ask for permission to run tools. Formulate a plan, execute the necessary tools, and present your findings directly.
     4.  **Summarize your findings.** After executing tools, present the results to the user in a clear, summarized format. Always include the Cypher queries you ran in formatted code blocks.
 
     **Available tools:**
