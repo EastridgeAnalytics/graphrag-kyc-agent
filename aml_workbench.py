@@ -352,26 +352,37 @@ with main_col:
 with right_col:
     st.header("Details & Actions")
 
-    if st.session_state.selected_view == 'alert_analysis' and st.session_state.selected_alert_id:
-        alert_id = st.session_state.selected_alert_id
-        selected_alert = next((a for a in alerts if a.id == alert_id), None)
+    if st.session_state.selected_alert_ids:
+        selected_ids = st.session_state.selected_alert_ids
+        # Get the full alert objects for the selected IDs
+        selected_alerts = [a for a in alerts if a.id in selected_ids]
 
-        if selected_alert:
-            st.subheader(f"Login Location for Alert: {alert_id}")
-            map_df = pd.DataFrame({'lat': [selected_alert.latitude], 'lon': [selected_alert.longitude]})
-            st.map(map_df, zoom=11)
+        if selected_alerts:
+            if len(selected_alerts) == 1:
+                st.subheader(f"Login Location for Alert: {selected_alerts[0].id}")
+            else:
+                st.subheader(f"Login Locations for {len(selected_alerts)} Alerts")
 
-            with st.expander("Show Detailed Transactions"):
-                st.subheader("Recent Transactions")
-                customer_id = get_customer_for_alert(alert_id)
-                if customer_id:
-                    transactions_df = get_transactions_for_customer(customer_id)
-                    if not transactions_df.empty:
-                        st.bar_chart(transactions_df[['debit', 'credit']])
-                    else:
-                        st.write("No transactions for customer.")
+            # Create a DataFrame with coordinates for all selected alerts
+            map_df = pd.DataFrame(
+                [(alert.latitude, alert.longitude) for alert in selected_alerts],
+                columns=['lat', 'lon']
+            )
+            st.map(map_df, zoom=2) # Use a wider zoom for multiple points
 
-    elif st.session_state.selected_view == 'sar_review' and st.session_state.selected_sar_id:
+            # The expander for transactions is only shown for a single alert selection
+            if len(selected_alerts) == 1:
+                with st.expander("Show Detailed Transactions"):
+                    st.subheader("Recent Transactions")
+                    customer_id = get_customer_for_alert(selected_alerts[0].id)
+                    if customer_id:
+                        transactions_df = get_transactions_for_customer(customer_id)
+                        if not transactions_df.empty:
+                            st.bar_chart(transactions_df[['debit', 'credit']])
+                        else:
+                            st.write("No transactions for customer.")
+
+    elif st.session_state.selected_sar_id:
         sar_id = st.session_state.selected_sar_id
         selected_draft = next((d for d in sar_drafts if d.id == sar_id), None)
 

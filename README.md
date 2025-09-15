@@ -145,6 +145,13 @@ Test the agent tools with these example questions:
    ```
    This tests the `create_memory` tool.
 
+6. Velocity of transactions:
+   ```
+   I'm reviewing alert 410b, and i'm wondering whats going on. why was this alert created? is there any pii linking those customers prior to these new links connected via phone?
+   ```
+   This tests the `get_customer_and_accounts` tool.
+
+
 
 # **Run the AML Analyst Workbench**
 
