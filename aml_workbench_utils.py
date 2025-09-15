@@ -123,6 +123,53 @@ def get_graph_for_alert(alert_id):
         df = pd.DataFrame(node_details)
         return nodes, edges, df
 
+def get_graph_for_alerts(alert_ids: list[str]):
+    driver = get_driver()
+    with driver.session(database=os.getenv("NEO4J_DATABASE", "neo4j")) as session:
+        # This query will run for each alert_id and we'll merge the results
+        all_nodes = {}
+        all_edges = set()
+        all_node_details = {}
+
+        for alert_id in alert_ids:
+            result = session.run("""
+                MATCH (alert:Alert {id: $alert_id})<-[:HAS_ALERT]-(customer:Customer)
+                CALL apoc.path.subgraphAll(customer, {maxLevel: 2})
+                YIELD nodes, relationships
+                RETURN nodes, relationships
+            """, alert_id=alert_id)
+            
+            record = result.single()
+            if record:
+                nodes_raw = record["nodes"]
+                rels_raw = record["relationships"]
+
+                for node in nodes_raw:
+                    node_id = str(node.id)
+                    if node_id not in all_nodes:
+                        labels = list(node.labels)
+                        properties = dict(node)
+                        
+                        for key, value in properties.items():
+                            if hasattr(value, 'isoformat'):
+                                properties[key] = value.isoformat()
+                        
+                        display_label = properties.get('name', properties.get('id', node_id))
+                        all_nodes[node_id] = Node(id=node_id, label=str(display_label), size=15, shape="dot")
+                        
+                        detail = {"neo4j_id": node_id, "labels": labels}
+                        detail.update(properties)
+                        all_node_details[node_id] = detail
+
+                for rel in rels_raw:
+                    edge_tuple = (str(rel.start_node.id), str(rel.end_node.id), rel.type)
+                    all_edges.add(edge_tuple)
+
+        final_nodes = list(all_nodes.values())
+        final_edges = [Edge(source=s, target=t, label=l) for s, t, l in all_edges]
+        df = pd.DataFrame(list(all_node_details.values()))
+
+        return final_nodes, final_edges, df
 
 def generate_sar_narrative(analyst_commentary, graph_data_df):
     llm = ChatOpenAI(model="gpt-4o", temperature=0) # Make sure OPENAI_API_KEY is in .env
