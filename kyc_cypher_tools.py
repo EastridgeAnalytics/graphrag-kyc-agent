@@ -218,6 +218,63 @@ def is_customer_linked_to_hot_property(customer_id: str) -> dict:
             }
         return None
 
+@function_tool
+def find_shared_pii_for_alert(alert_id: str) -> dict:
+    """
+    Finds customers linked to an alert and checks for any shared PII (Phone, Address, Device) among them.
+    Use this tool to investigate if customers involved in an alert have pre-existing relationships.
+    """
+    logger.info(f"TOOL: FIND_SHARED_PII_FOR_ALERT - {alert_id}")
+
+    # First, get all customers for the alert
+    with driver.session() as session:
+        result = session.run(
+            "MATCH (a:Alert {id: $alert_id})<-[:HAS_ALERT]-(c:Customer) RETURN collect(c.id) as customer_ids",
+            alert_id=alert_id
+        )
+        record = result.single()
+        if not record or not record["customer_ids"]:
+            return {"summary": "No customers found for this alert."}
+        customer_ids = record["customer_ids"]
+
+    # Now, find shared PII among these customers
+    with driver.session() as session:
+        query = """
+        UNWIND $customer_ids AS custId1
+        UNWIND $customer_ids AS custId2
+        WITH custId1, custId2
+        WHERE custId1 < custId2
+        MATCH (c1:Customer {id: custId1})
+        MATCH (c2:Customer {id: custId2})
+        OPTIONAL MATCH (c1)-[:HAS_PHONE]->(p:PhoneNumber)<-[:HAS_PHONE]-(c2)
+        OPTIONAL MATCH (c1)-[:LIVES_AT]->(a:Address)<-[:LIVES_AT]-(c2)
+        OPTIONAL MATCH (c1)-[:USES_DEVICE]->(d:Device)<-[:USES_DEVICE]-(c2)
+        WITH c1, c2,
+             collect(DISTINCT p.id) AS shared_phones,
+             collect(DISTINCT a.id) AS shared_addresses,
+             collect(DISTINCT d.id) AS shared_devices
+        WHERE size(shared_phones) > 0 OR size(shared_addresses) > 0 OR size(shared_devices) > 0
+        RETURN c1.id AS customer1,
+               c2.id AS customer2,
+               shared_phones,
+               shared_addresses,
+               shared_devices
+        """
+        result = session.run(query, customer_ids=customer_ids)
+        shared_links = [record.data() for record in result]
+
+    if not shared_links:
+        return {
+            "summary": "No pre-existing shared PII found among the customers linked to this alert.",
+            "customers_analyzed": customer_ids
+        }
+    else:
+        return {
+            "summary": "Found pre-existing shared PII among customers linked to this alert.",
+            "shared_links": shared_links,
+            "customers_analyzed": customer_ids
+        }
+
 async def main():
     
     

@@ -4,7 +4,7 @@ from agents.mcp import MCPServerStdio, MCPServer
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
 from schemas import CustomerAccountsInput, CustomerAccountsOutput, CustomerModel, AccountModel, TransactionModel, GenerateCypherRequest, LoadSqlCustomerToNeo4jInput
-from kyc_cypher_tools import get_customer_info, find_customers_in_rings, is_customer_in_suspicious_ring, is_customer_bridge, is_customer_linked_to_hot_property
+from kyc_cypher_tools import get_customer_info, find_customers_in_rings, is_customer_in_suspicious_ring, is_customer_bridge, is_customer_linked_to_hot_property, find_shared_pii_for_alert
 import asyncio
 from pydantic import BaseModel, Field
 from ollama import chat
@@ -500,6 +500,7 @@ async def init_agent(use_genai_toolbox: bool = False):
         - `is_customer_bridge`: To check if a customer is employed by multiple companies.
         - `is_customer_linked_to_hot_property`: To check if a customer lives at a high-risk address.
         - `get_customer_info`: For basic customer and account details.
+        - `find_shared_pii_for_alert`: To check for pre-existing PII links (phone, address, device) between customers associated with an alert.
     2.  **Use Custom Cypher as a Last Resort:** Only if no specific tool can answer the question, you must follow this two-step process:
         a. First, use the `generate_cypher` tool to create a Cypher query.
         b. Second, use the `execute_cypher` tool to run the query you just generated.
@@ -516,6 +517,7 @@ async def init_agent(use_genai_toolbox: bool = False):
     - is_customer_in_suspicious_ring: Check if a customer is part of a transaction ring.
     - is_customer_bridge: Check if a customer is employed by multiple companies.
     - is_customer_linked_to_hot_property: Check if a customer is linked to a high-risk address.
+    - find_shared_pii_for_alert: Check for shared PII between customers on an alert.
     - generate_cypher: **(Step 1 for custom questions)** Generate a Cypher query from a natural language question.
     - execute_cypher: **(Step 2 for custom questions)** Execute a Cypher query to get data from the database."""
 
@@ -530,6 +532,7 @@ async def init_agent(use_genai_toolbox: bool = False):
         is_customer_in_suspicious_ring,
         is_customer_bridge,
         is_customer_linked_to_hot_property,
+        find_shared_pii_for_alert,
         execute_cypher
     ]
 

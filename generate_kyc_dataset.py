@@ -591,6 +591,134 @@ elapsed = end_time - start_time
 print(f"⌛ Loading Velocity Attack Data took {elapsed:.2f} seconds")
 
 
+# ———————————————
+# 5.6 Generate Co-opted Clean Skin Velocity Data (Device)
+# ———————————————
+def generate_device_velocity_attack():
+    print("Generating co-opted clean skin velocity data (Device)...")
+    start_time = time.perf_counter()
+
+    with get_session() as session:
+        # 1. Select 50 random existing customers not on a watchlist
+        result = session.run("""
+            MATCH (c:Customer)
+            WHERE c.on_watchlist = false AND NOT c.id STARTS WITH 'CUST_V_'
+            RETURN c.id AS customerId
+            LIMIT 50
+        """)
+        customer_ids = [record["customerId"] for record in result]
+
+        if len(customer_ids) < 50:
+            print("⚠️  Could not find enough non-watchlist customers to generate device velocity alert.")
+            return
+
+        # 2. Create a shared device and link it to these customers
+        shared_device_id = f"DEVICE_VELOCITY_{uuid.uuid4().hex[:4].upper()}"
+        session.run("MERGE (d:Device {id: $id})", id=shared_device_id)
+
+        for cust_id in customer_ids:
+            session.run("""
+                MATCH (c:Customer {id: $cust_id})
+                MATCH (d:Device {id: $dev_id})
+                MERGE (c)-[:USES_DEVICE]->(d)
+            """, cust_id=cust_id, dev_id=shared_device_id)
+
+        # 3. Create an alert for this pattern and link to all involved customers
+        alert_id = f"ALERT_DEV_VEL_{uuid.uuid4().hex[:4].upper()}"
+        description = f"Device Velocity Detected: {len(customer_ids)} established customers suddenly began using a new shared device ({shared_device_id})."
+        
+        session.run("""
+            CREATE (a:Alert {
+                id: $alert_id,
+                description: $description,
+                timestamp: $timestamp,
+                status: 'new',
+                latitude: $latitude,
+                longitude: $longitude,
+                related_entity_id: $shared_device_id
+            })
+        """, 
+        alert_id=alert_id, 
+        description=description, 
+        timestamp=datetime.now().isoformat(),
+        latitude=51.5074 + random.uniform(-0.05, 0.05),
+        longitude=-0.1278 + random.uniform(-0.05, 0.05),
+        shared_device_id=shared_device_id
+        )
+
+        for cust_id in customer_ids:
+            session.run("""
+                MATCH (c:Customer {id: $cust_id})
+                MATCH (a:Alert {id: $alert_id})
+                MERGE (c)-[:HAS_ALERT]->(a)
+            """, cust_id=cust_id, alert_id=alert_id)
+        
+        print(f"  ✅ Created Device Velocity Alert: {alert_id} involving {len(customer_ids)} customers.")
+
+    elapsed = time.perf_counter() - start_time
+    print(f"⌛ Loading Device Velocity Attack Data took {elapsed:.2f} seconds")
+
+
+# ———————————————
+# 5.7 Generate High-Risk Jurisdiction Velocity Data (IP Address)
+# ———————————————
+def generate_ip_velocity_attack():
+    print("Generating high-risk jurisdiction velocity data (IP Address)...")
+    start_time = time.perf_counter()
+    
+    with get_session() as session:
+        # 1. Create a high-risk IP address
+        high_risk_ip_id = f"IP_HIGH_RISK_{uuid.uuid4().hex[:4].upper()}"
+        session.run("MERGE (ip:IP_Address {id: $id, country: 'High-Risk-Jurisdiction'})", id=high_risk_ip_id)
+
+        # 2. Create 75 new synthetic customers
+        n_ip_customers = 75
+        ip_customer_ids = [f"CUST_IP_V_{i:03d}" for i in range(n_ip_customers)]
+        
+        for cust_id in ip_customer_ids:
+            session.run("""
+                MERGE (c:Customer {id: $cust_id, name: $cust_id, on_watchlist: true})
+                WITH c
+                MATCH (ip:IP_Address {id: $ip_id})
+                MERGE (c)-[:HAS_IP]->(ip) 
+            """, cust_id=cust_id, ip_id=high_risk_ip_id)
+            
+        # 3. Create an alert and link to all involved customers
+        alert_id = f"ALERT_IP_VEL_{uuid.uuid4().hex[:4].upper()}"
+        description = f"High-Risk IP Velocity Detected: {n_ip_customers} new customers appeared from a high-risk IP ({high_risk_ip_id})."
+        
+        session.run("""
+            CREATE (a:Alert {
+                id: $alert_id,
+                description: $description,
+                timestamp: $timestamp,
+                status: 'new',
+                latitude: $latitude,
+                longitude: $longitude,
+                related_entity_id: $high_risk_ip_id
+            })
+        """, 
+        alert_id=alert_id, 
+        description=description, 
+        timestamp=datetime.now().isoformat(),
+        latitude=51.5074 + random.uniform(-0.05, 0.05),
+        longitude=-0.1278 + random.uniform(-0.05, 0.05),
+        high_risk_ip_id=high_risk_ip_id
+        )
+
+        for cust_id in ip_customer_ids:
+            session.run("""
+                MATCH (c:Customer {id: $cust_id})
+                MATCH (a:Alert {id: $alert_id})
+                MERGE (c)-[:HAS_ALERT]->(a)
+            """, cust_id=cust_id, alert_id=alert_id)
+        
+        print(f"  ✅ Created High-Risk IP Velocity Alert: {alert_id} involving {n_ip_customers} customers.")
+        
+    elapsed = time.perf_counter() - start_time
+    print(f"⌛ Loading High-Risk IP Velocity Data took {elapsed:.2f} seconds")
+
+
 # 6. Generate Alerts
 def detect_and_create_velocity_alerts():
     print("Detecting velocity patterns and creating alerts...")
@@ -613,14 +741,8 @@ def detect_and_create_velocity_alerts():
             alert_id = f"ALERT_VEL_{uuid.uuid4().hex[:4].upper()}"
             description = f"Velocity attack detected: phone number {phone_id} linked to {customer_count} customers."
             
-            london_lat = 51.5074
-            london_lon = -0.1278
-            
-            # Link the alert to the first customer in the group
-            customer_to_link = customer_ids[0]
-
+            # Create the alert node once
             session.run("""
-              MATCH (c:Customer {id: $customer_id})
                 CREATE (a:Alert {
                     id: $alert_id,
                     description: $description,
@@ -630,14 +752,21 @@ def detect_and_create_velocity_alerts():
                     status: 'new',
                     related_entity_id: $phone_id
                 })
-              MERGE (c)-[:HAS_ALERT]->(a)
             """, alert_id=alert_id, description=description, 
                  timestamp=datetime.now().isoformat(),
-                 latitude=london_lat + random.uniform(-0.05, 0.05),
-                 longitude=london_lon + random.uniform(-0.05, 0.05),
-                 phone_id=phone_id,
-                 customer_id=customer_to_link)
-            print(f"  Created alert {alert_id} for phone {phone_id}")
+                 latitude=51.5074 + random.uniform(-0.05, 0.05),
+                 longitude=-0.1278 + random.uniform(-0.05, 0.05),
+                 phone_id=phone_id)
+
+            # Link the alert to all customers involved
+            for customer_id in customer_ids:
+                session.run("""
+                    MATCH (c:Customer {id: $customer_id})
+                    MATCH (a:Alert {id: $alert_id})
+                    MERGE (c)-[:HAS_ALERT]->(a)
+                """, customer_id=customer_id, alert_id=alert_id)
+
+            print(f"  Created alert {alert_id} for phone {phone_id} involving {len(customer_ids)} customers.")
 
 n_alerts = 100
 alert_rows = []
@@ -684,3 +813,5 @@ with get_session() as sess:
     print(f"⌛ Loading Alerts took {elapsed:.2f} seconds")
 
 detect_and_create_velocity_alerts()
+generate_device_velocity_attack()
+generate_ip_velocity_attack()
