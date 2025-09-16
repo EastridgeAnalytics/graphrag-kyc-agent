@@ -137,8 +137,8 @@ def find_customer_rings(max_number_rings: int = 10, customer_in_watchlist: bool 
 # Tool 3: Neo4j MCP server setup
 neo4j_mcp_server = MCPServerStdio(
     params={
-        "command": "uvx",
-        "args": ["mcp-neo4j-cypher@0.2.1"],
+        "command": "mcp-neo4j-cypher",
+        "args": [],
         "env": {
             "NEO4J_URI": NEO4J_URI,
             "NEO4J_USERNAME": NEO4J_USER,
