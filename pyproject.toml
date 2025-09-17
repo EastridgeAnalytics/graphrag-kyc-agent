@@ -19,3 +19,6 @@ dependencies = [
     "langchain>=0.2.11",
     "langchain-openai>=0.1.17",
 ]
+
+[tool.setuptools]
+py-modules = ["kyc_agent", "aml_workbench_utils", "schemas", "kyc_cypher_tools"]

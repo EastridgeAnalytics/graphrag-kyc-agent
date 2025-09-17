@@ -1,12 +1,45 @@
 services:
   neo4j:
-    image: neo4j:2025.05.0
-    #volumes:         
-    #    - ./data:/data
+    image: neo4j:5.20.0
     environment:
         - NEO4J_AUTH=neo4j/password
-        - NEO4J_PLUGINS= ["apoc"]
+        - NEO4J_PLUGINS=["apoc"]
     ports:
       - "7474:7474"
       - "7687:7687"
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p password 'RETURN 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: kyc_database
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d kyc_database"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  genai_toolbox:
+    image: local-genai-toolbox
+    command: ["--tools-file", "/app/tools.yaml", "--address", "0.0.0.0"]
+    volumes:
+      - ./tools.yaml:/app/tools.yaml
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    restart: unless-stopped

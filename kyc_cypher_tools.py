@@ -1,11 +1,40 @@
+# --- DEBUG HELPERS (paste once per file while debugging) ---
+import traceback, logging
+dbg = logging.getLogger("AGENT_DBG")
+dbg.setLevel(logging.INFO)
+
+def _assert_mcp_list(agent):
+    ms = getattr(agent, "mcp_servers", None)
+    # If the SDK leaves this as None when absent, that's OK. We only forbid [None] etc.
+    if ms is None:
+        return
+    if not isinstance(ms, (list, tuple)):
+        raise RuntimeError(f"mcp_servers must be list|tuple, got {type(ms)}")
+    bad = [i for i, s in enumerate(ms) if s is None]
+    if bad:
+        where = "".join(traceback.format_stack(limit=8))
+        raise RuntimeError(f"mcp_servers contains None at indexes {bad}\nStack:\n{where}")
+
+def _dump_agent_state(agent, label=""):
+    tools = [getattr(t, "name", repr(t)) for t in getattr(agent, "tools", [])]
+    mcp = getattr(agent, "mcp_servers", None)
+    dbg.info("AGENT_STATE %s tools=%s", label, tools)
+    dbg.info("AGENT_STATE %s mcp_servers=%s", label, mcp)
+# --- END DEBUG HELPERS ---
+
+
 import os
 from agents import Agent, Runner, function_tool
 from agents.mcp import MCPServerStdio
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
-from schemas import CustomerAccountsInput, CustomerAccountsOutput, CustomerModel, AccountModel, TransactionModel, GenerateCypherRequest
+from schemas import (
+    CustomerAccountsInput, CustomerAccountsOutput, CustomerModel, AccountModel, 
+    TransactionModel, GenerateCypherRequest, CustomerInfoOutput, CustomerInfo, 
+    RingCustomer, CustomerBridgeOutput, HotPropertyOutput, SharedPIIOutput, SharedPII
+)
 import asyncio
-from pydantic import BaseModel
+from typing import List, Optional
 from ollama import chat
 import logging
 
@@ -35,13 +64,13 @@ driver = get_neo4j_driver()
 
 
 @function_tool
-def get_customer_info(customer_id: str) -> dict:
+def get_customer_info(customer_id: str) -> CustomerInfoOutput:
     """
     Given a customer_id, return all information in the Customer node and the name of all Accounts owned by this customer.
     Args:
         customer_id (str): The ID of the customer to look up.
     Returns:
-        dict: Customer information and a list of account names owned by this customer.
+        CustomerInfoOutput: Customer information and a list of account names owned by this customer.
     """
     logger.info(f"TOOL: GET_CUSTOMER_INFO - {customer_id}")
     with driver.session() as session:
@@ -56,20 +85,18 @@ def get_customer_info(customer_id: str) -> dict:
         customer_data = None
         for record in result:
             # Extract customer fields from the record
-            customer_data = {
-                "id": record["customer_id"],
-                "name": record["customer_name"],
-                "on_watchlist": record["customer_on_watchlist"],
-                "is_pep": record["customer_is_pep"]
-            }
+            customer_data = CustomerInfo(
+                id=record["customer_id"],
+                name=record["customer_name"],
+                on_watchlist=record["customer_on_watchlist"],
+                is_pep=record["customer_is_pep"]
+            )
             account_names.append(record["account_name"])
-        if customer_data is not None:
-            return {"customer": customer_data, "account_names": account_names}
-        else:
-            return {"customer": None, "account_names": []}
+        
+        return CustomerInfoOutput(customer=customer_data, account_names=account_names)
 
 @function_tool
-def find_customers_in_rings(limit: int = 50) -> list[dict]:
+def find_customers_in_rings(limit: int = 50) -> List[RingCustomer]:
     """
     Find customers of interest (on watchlist or PEP) involved in account rings (cycles up to 6 hops).
     Args:
@@ -77,7 +104,7 @@ def find_customers_in_rings(limit: int = 50) -> list[dict]:
         is_customer_pep (bool): Filter for customers who are PEPs.
         limit (int): Maximum number of results to return.
     Returns:
-        list[dict]: List of dicts with customer and account info in the ring.
+        list[RingCustomer]: List of customers and their account info in the ring.
     """
     logger.info(f"TOOL: FIND_CUSTOMERS_IN_RINGS - limit={limit}")
     with driver.session() as session:
@@ -106,13 +133,13 @@ def find_customers_in_rings(limit: int = 50) -> list[dict]:
         )
         customers = []
         for record in result:
-            customers.append({
-                "customer_name": record["customer_name"],
-                "customer_id": record["customer_id"],
-                "customer_on_watchlist": record["customer_on_watchlist"],
-                "customer_politically_exposed": record["customer_politically_exposed"],
-                "customer_account_in_ring": record["customer_accounts_in_ring"]
-            })
+            customers.append(RingCustomer(
+                customer_name=record["customer_name"],
+                customer_id=record["customer_id"],
+                customer_on_watchlist=record["customer_on_watchlist"],
+                customer_politically_exposed=record["customer_politically_exposed"],
+                customer_accounts_in_ring=record["customer_accounts_in_ring"]
+            ))
         return customers
 
 @function_tool
@@ -143,13 +170,13 @@ def is_customer_in_suspicious_ring(customer_id: str) -> bool:
         return False
 
 @function_tool
-def is_customer_bridge(customer_id: str) -> dict:
+def is_customer_bridge(customer_id: str) -> Optional[CustomerBridgeOutput]:
     """
     Returns customer details if the customer is employed by more than 2 companies, otherwise returns None.
     Args:
         customer_id (str): The ID of the customer to check.
     Returns:
-        dict: Customer details with employer information if employed by more than 2 companies, None otherwise.
+        CustomerBridgeOutput: Customer details with employer information if employed by more than 2 companies, None otherwise.
     """
     logger.info(f"TOOL: IS_CUSTOMER_BRIDGE - {customer_id}")
     with driver.session() as session:
@@ -164,17 +191,17 @@ def is_customer_bridge(customer_id: str) -> dict:
         )
         record = result.single()
         if record is not None:
-            return {
-                "customer_id": record["c.id"],
-                "customer_name": record["c.name"], 
-                "on_watchlist": record["c.on_watchlist"],
-                "is_pep": record["c.is_pep"],
-                "employer_names": record["employer_names"]
-            }
+            return CustomerBridgeOutput(
+                customer_id=record["c.id"],
+                customer_name=record["c.name"], 
+                on_watchlist=record["c.on_watchlist"],
+                is_pep=record["c.is_pep"],
+                employer_names=record["employer_names"]
+            )
         return None
 
 @function_tool
-def is_customer_linked_to_hot_property(customer_id: str) -> dict:
+def is_customer_linked_to_hot_property(customer_id: str) -> Optional[HotPropertyOutput]:
     """
     Check if a customer is linked to a "hot property" (address shared with more than 20 other customers).
     
@@ -182,7 +209,7 @@ def is_customer_linked_to_hot_property(customer_id: str) -> dict:
         customer_id (str): The ID of the customer to check.
     
     Returns:
-        dict: Customer details, address information, and count of other customers at the same address.
+        HotPropertyOutput: Customer details, address information, and count of other customers at the same address.
               Returns None if customer is not linked to a hot property.
     """
     logger.info(f"TOOL: IS_CUSTOMER_LINKED_TO_HOT_PROPERTY - {customer_id}")
@@ -208,15 +235,72 @@ def is_customer_linked_to_hot_property(customer_id: str) -> dict:
         )
         record = result.single()
         if record is not None:
-            return {
-                "address": record["address"],
-                "city": record["city"],
-                "num_other_customers": record["num_other_customers"],
-                "customer_name": record["customer_name"],
-                "customer_on_watchlist": record["customer_on_watchlist"],
-                "customer_is_pep": record["customer_is_pep"]
-            }
+            return HotPropertyOutput(
+                address=record["address"],
+                city=record["city"],
+                num_other_customers=record["num_other_customers"],
+                customer_name=record["customer_name"],
+                customer_on_watchlist=record["customer_on_watchlist"],
+                customer_is_pep=record["customer_is_pep"]
+            )
         return None
+
+@function_tool
+def find_shared_pii_for_alert(alert_id: str) -> SharedPIIOutput:
+    """
+    Finds customers linked to an alert and checks for any shared PII (Phone, Address, Device) among them.
+    Use this tool to investigate if customers involved in an alert have pre-existing relationships.
+    """
+    logger.info(f"TOOL: FIND_SHARED_PII_FOR_ALERT - {alert_id}")
+
+    # First, get all customers for the alert
+    with driver.session() as session:
+        result = session.run(
+            "MATCH (a:Alert {id: $alert_id})<-[:HAS_ALERT]-(c:Customer) RETURN collect(c.id) as customer_ids",
+            alert_id=alert_id
+        )
+        record = result.single()
+        if not record or not record["customer_ids"]:
+            return SharedPIIOutput(summary="No customers found for this alert.", customers_analyzed=[])
+        customer_ids = record["customer_ids"]
+
+    # Now, find shared PII among these customers
+    with driver.session() as session:
+        query = """
+        UNWIND $customer_ids AS custId1
+        UNWIND $customer_ids AS custId2
+        WITH custId1, custId2
+        WHERE custId1 < custId2
+        MATCH (c1:Customer {id: custId1})
+        MATCH (c2:Customer {id: custId2})
+        OPTIONAL MATCH (c1)-[:HAS_PHONE]->(p:PhoneNumber)<-[:HAS_PHONE]-(c2)
+        OPTIONAL MATCH (c1)-[:LIVES_AT]->(a:Address)<-[:LIVES_AT]-(c2)
+        OPTIONAL MATCH (c1)-[:USES_DEVICE]->(d:Device)<-[:USES_DEVICE]-(c2)
+        WITH c1, c2,
+             collect(DISTINCT p.id) AS shared_phones,
+             collect(DISTINCT a.id) AS shared_addresses,
+             collect(DISTINCT d.id) AS shared_devices
+        WHERE size(shared_phones) > 0 OR size(shared_addresses) > 0 OR size(shared_devices) > 0
+        RETURN c1.id AS customer1,
+               c2.id AS customer2,
+               shared_phones,
+               shared_addresses,
+               shared_devices
+        """
+        result = session.run(query, customer_ids=customer_ids)
+        shared_links = [SharedPII(**record.data()) for record in result]
+
+    if not shared_links:
+        return SharedPIIOutput(
+            summary="No pre-existing shared PII found among the customers linked to this alert.",
+            customers_analyzed=customer_ids
+        )
+    else:
+        return SharedPIIOutput(
+            summary="Found pre-existing shared PII among customers linked to this alert.",
+            shared_links=shared_links,
+            customers_analyzed=customer_ids
+        )
 
 async def main():
     
@@ -236,6 +320,8 @@ async def main():
         tools=[get_customer_info,find_customers_in_rings, is_customer_in_suspicious_ring, is_customer_bridge, is_customer_linked_to_hot_property]
        
     )
+    _assert_mcp_list(kyc_agent)
+    _dump_agent_state(kyc_agent, label="post-construct")
     
     # Initialize conversation history
     conversation_history = []
@@ -246,7 +332,7 @@ async def main():
         if query.lower() == 'quit':
             break
             
-        # Run the agent with conversation history
+        _dump_agent_state(kyc_agent, label="pre-run")
         result = await Runner.run(
             kyc_agent, 
             conversation_history + [{"role": "user", "content": query}]
