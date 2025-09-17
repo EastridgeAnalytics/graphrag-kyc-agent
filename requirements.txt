@@ -1,0 +1,38 @@
+# Core dependencies
+neo4j>=5.15.0
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+
+# Agent framework (assuming you have a local agents library or replace with appropriate)
+# agents>=1.0.0  # Replace with actual agent framework dependency
+
+# String matching and record linkage
+jellyfish>=0.11.0
+recordlinkage>=0.16.0
+python-Levenshtein>=0.20.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Async support
+asyncio-mqtt>=0.16.0
+
+# Optional: For production deployments
+gunicorn>=21.2.0
+uvicorn>=0.24.0
+
+# Development dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Ollama client for Gemma3-4B Text-to-Cypher
+ollama>=0.1.7
+
+# Cloud API providers for Gemma (choose based on your preference)
+google-generativeai>=0.3.0  # For Google AI Studio
+openai>=1.0.0               # For OpenAI-compatible APIs
+httpx>=0.25.0               # For Hugging Face and other HTTP APIs
+
+# HTTP client
+httpx>=0.25.0

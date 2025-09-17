@@ -24,24 +24,28 @@ def _dump_agent_state(agent, label=""):
 
 
 import os
-from agents import Agent, Runner, function_tool
-from neo4j import GraphDatabase
-from dotenv import load_dotenv
-from schemas import (
-    CustomerAccountsInput, CustomerAccountsOutput, CustomerModel, AccountModel, 
-    TransactionModel, GenerateCypherRequest, SearchSqlCustomerInput, 
-    IngestSqlCustomerInput, GetTransactionsForAlertInput, UpdateAlertStatusInput,
-    CustomerRingsOutput, RingModel, SearchSqlCustomerByRiskInput
-)
-from kyc_cypher_tools import get_customer_info, find_customers_in_rings, is_customer_in_suspicious_ring, is_customer_bridge, is_customer_linked_to_hot_property, find_shared_pii_for_alert
 import asyncio
-from ollama import chat
-import logging
-from neo4j.time import DateTime, Date, Time, Duration
 import json
 import httpx
 import sys
 import functools
+import logging
+from dotenv import load_dotenv
+from neo4j import GraphDatabase
+from neo4j.time import DateTime, Date, Time, Duration
+from ollama import chat
+
+from agents import Agent, Runner, function_tool
+from schemas import (
+    CustomerAccountsInput, CustomerAccountsOutput, CustomerModel, AccountModel,
+    TransactionModel, GenerateCypherRequest, SearchSqlCustomerInput,
+    IngestSqlCustomerInput, GetTransactionsForAlertInput, UpdateAlertStatusInput,
+    CustomerRingsOutput, RingModel, SearchSqlCustomerByRiskInput
+)
+from kyc_cypher_tools import (
+    get_customer_info, find_customers_in_rings, is_customer_in_suspicious_ring,
+    is_customer_bridge, is_customer_linked_to_hot_property, find_shared_pii_for_alert
+)
 
 # Configure logging
 logging.basicConfig(
@@ -54,7 +58,7 @@ logger = logging.getLogger("KYC_AGENT")
 # Load environment variables
 load_dotenv()
 
-# Read Neo4j environment variables into variables
+# Read Neo4j environment variables
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
@@ -64,7 +68,6 @@ NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 def get_neo4j_driver():
     return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
-# Neo4j driver
 driver = get_neo4j_driver()
 
 # Tool 1: Get Customer details and its Accounts and some recent transactions
@@ -73,10 +76,6 @@ def get_customer_and_accounts(input: CustomerAccountsInput, tx_limit: int = 5) -
     """
     Get Customer details including its Accounts and some recent transactions.
     Limits the number of most recent transactions per account.
-    
-    Args:
-        input: CustomerAccountsInput containing customer_id
-        tx_limit: Maximum number of recent transactions to return per account (default: 5)
     """
     logger.info(f"TOOL: GET_CUSTOMER_AND_ACCOUNTS - {input.customer_id}")
 
@@ -91,8 +90,7 @@ def get_customer_and_accounts(input: CustomerAccountsInput, tx_limit: int = 5) -
     }
     RETURN c as customer, a as account, transactions
     """
-    
-    # Log the Cypher query for user visibility
+
     print("🔍 **Cypher Query Executed:**")
     print(f"```cypher\n{cypher_query.strip()}\n```")
     print(f"**Parameters:** customer_id='{input.customer_id}', tx_limit={tx_limit}")
@@ -103,43 +101,27 @@ def get_customer_and_accounts(input: CustomerAccountsInput, tx_limit: int = 5) -
             customer_id=input.customer_id,
             tx_limit=tx_limit
         )
-        # Get the records from the result
         records = result.data()
-        # Initialize lists to store the customer, accounts, and transactions
         accounts = []
         for record in records:
             customer = dict(record["customer"])
             account = dict(record["account"])
             account["transactions"] = [dict(t) for t in record["transactions"]]
             accounts.append(account)
-            
 
         return CustomerAccountsOutput(
             customer=CustomerModel(**customer),
             accounts=[AccountModel(**a) for a in accounts]
         )
-       
 
 # Tool 2: Identify watchlisted customers in suspicious rings
-@function_tool 
+@function_tool
 def find_customer_rings(max_number_rings: int = 10, customer_in_watchlist: bool = True, customer_is_pep: bool = False, customer_id: str = None) -> CustomerRingsOutput:
     """
-    Detects circular transaction patterns (up to 6 hops) involving high-risk customers.
-    
-    Finds account cycles where the accounts are owned by customers matching specified
-    risk criteria (watchlisted and/or PEP status).
-    
-    Args:
-        max_number_rings: Maximum rings to return (default: 10)
-        customer_in_watchlist: Filter for watchlisted customers (default: True)
-        customer_is_pep: Filter for PEP customers (default: False)
-        customer_id: Specific customer to focus on (not implemented)
-    
-    Returns:
-        CustomerRingsOutput: Contains ring paths and associated high-risk customers
+    Detect circular transaction patterns (up to 6 hops) involving high-risk customers.
     """
     logger.info(f"TOOL: FIND_CUSTOMER_RINGS - {max_number_rings} - {customer_in_watchlist} - {customer_is_pep}")
-    
+
     cypher_query = """
     MATCH p=(a:Account)-[:FROM|TO*6]->(a:Account)
     WITH p, [n IN nodes(p) WHERE n:Account] AS accounts
@@ -156,12 +138,11 @@ def find_customer_rings(max_number_rings: int = 10, customer_in_watchlist: bool 
       watchRels
     LIMIT $max_number_rings
     """
-    
-    # Log the Cypher query for user visibility
+
     print("🔍 **Cypher Query Executed:**")
     print(f"```cypher\n{cypher_query.strip()}\n```")
     print(f"**Parameters:** max_number_rings={max_number_rings}, customer_in_watchlist={customer_in_watchlist}, customer_is_pep={customer_is_pep}")
-    
+
     with driver.session() as session:
         result = session.run(
             cypher_query,
@@ -171,7 +152,6 @@ def find_customer_rings(max_number_rings: int = 10, customer_in_watchlist: bool 
         )
         rings = []
         for record in result:
-            # Convert path to a list of node dictionaries for easier consumption
             path_nodes = [dict(node) for node in record["p"].nodes]
             watched_customers = [dict(cust) for cust in record["watchedCustomers"]]
             watch_rels = [dict(rel) for rel in record["watchRels"]]
@@ -180,7 +160,7 @@ def find_customer_rings(max_number_rings: int = 10, customer_in_watchlist: bool 
                 watched_customers=watched_customers,
                 watch_relationships=watch_rels
             ))
-        
+
         return CustomerRingsOutput(customer_rings=rings)
 
 # Tool 3: Create Memory node and link it to entities
@@ -190,7 +170,7 @@ def create_memory(content: str, customer_ids: list[str] = [], account_ids: list[
     Create a Memory node and link it to specified customers, accounts, and transactions
     """
     logger.info(f"TOOL: CREATE_MEMORY - {content} - {customer_ids} - {account_ids} - {transaction_ids}")
-    
+
     cypher_query = """
     CREATE (m:Memory {content: $content, created_at: datetime()})
     WITH m
@@ -207,12 +187,11 @@ def create_memory(content: str, customer_ids: list[str] = [], account_ids: list[
     MERGE (m)-[:FOR_TRANSACTION]->(t)
     RETURN m.content as content
     """
-    
-    # Log the Cypher query for user visibility
+
     print("🔍 **Cypher Query Executed:**")
     print(f"```cypher\n{cypher_query.strip()}\n```")
     print(f"**Parameters:** content='{content}', customer_ids={customer_ids}, account_ids={account_ids}, transaction_ids={transaction_ids}")
-    
+
     with driver.session() as session:
         result = session.run(
             cypher_query,
@@ -221,31 +200,26 @@ def create_memory(content: str, customer_ids: list[str] = [], account_ids: list[
             account_ids=account_ids,
             transaction_ids=transaction_ids
         )
-        
-       
         return f"Created memory: {str(result)}"
 
-# Tool to update alert status
+# Tool 4: Update alert status
 @function_tool
 def update_alert_status(input: UpdateAlertStatusInput) -> str:
     """
     Updates the status of a specific alert in the knowledge graph.
-    Use this to reflect the progress of an investigation, for example,
-    marking an alert as 'under_review' when you start looking into it,
-    or 'closed' when the investigation is complete.
     """
     logger.info(f"TOOL: UPDATE_ALERT_STATUS - Alert ID: {input.alert_id}, New Status: {input.status}")
-    
+
     cypher_query = """
     MATCH (a:Alert {id: $alert_id})
     SET a.status = $status
     RETURN a.id as alert_id, a.status as new_status
     """
-    
+
     print("🔍 **Cypher Query Executed:**")
     print(f"```cypher\n{cypher_query.strip()}\n```")
     print(f"**Parameters:** alert_id='{input.alert_id}', status='{input.status}'")
-    
+
     with driver.session() as session:
         result = session.run(cypher_query, alert_id=input.alert_id, status=input.status)
         record = result.single()
@@ -254,72 +228,12 @@ def update_alert_status(input: UpdateAlertStatusInput) -> str:
         else:
             return f"Failed to update alert '{input.alert_id}'. It might not exist in the database."
 
-# Tool to load customer from SQL to Neo4j
-# This function is now obsolete as ingestion is handled by ingest_sql_customer_by_name
-# @function_tool
-# def load_sql_customer_to_neo4j(input: LoadSqlCustomerToNeo4jInput) -> str:
-#     """
-#     Loads a customer's data from the SQL database and ingests it into Neo4j.
-#     First, it searches for the customer in the SQL database using the search-customers-by-name tool.
-#     Then, it creates or updates the customer's node in Neo4j.
-#     """
-#     logger.info(f"TOOL: LOAD_SQL_CUSTOMER_TO_NEO4J - {input.customer_name}")
-
-#     # This is a placeholder for how you would call the tool through the agent/runner.
-#     # In a real scenario, the agent would decide to call this tool first,
-#     # and then we'd get the result. For this tool, we'll simulate this process.
-#     # A more advanced implementation could involve the tool_runner directly.
-
-#     # The agent would first use the 'search-customers-by-name' tool.
-#     # Let's assume the agent has run that and we have the result here.
-#     # For this example, we'll just log that this is what should happen.
-#     logger.info(f"Agent would now call 'search-customers-by-name' with name '{input.customer_name}' through the GenAI Toolbox MCP Server.")
-#     logger.info("For this demo, we will assume the tool returns a customer and we will proceed with ingestion.")
-    
-#     # In a real implementation, you would get the customer data from the tool call.
-#     # Here is some hardcoded example data that would be returned from the tool.
-#     customer_data_from_sql = {
-#         'id': '3',
-#         'name': input.customer_name,
-#         'email': f'{input.customer_name.lower().replace(" ", ".")}@email.com'
-#     }
-
-#     # Now, ingest this data into Neo4j
-#     cypher_query = """
-#     MERGE (c:Customer {id: $id})
-#     ON CREATE SET c.name = $name, c.email = $email, c.source = 'sql'
-#     ON MATCH SET c.name = $name, c.email = $email, c.source = 'sql'
-#     RETURN c.name as name
-#     """
-    
-#     # Log the Cypher query for user visibility
-#     print("🔍 **Cypher Query Executed:**")
-#     print(f"```cypher\n{cypher_query.strip()}\n```")
-#     print(f"**Parameters:** id='{customer_data_from_sql['id']}', name='{customer_data_from_sql['name']}', email='{customer_data_from_sql['email']}'")
-    
-#     with driver.session() as session:
-#         result = session.run(
-#             cypher_query,
-#             id=customer_data_from_sql['id'],
-#             name=customer_data_from_sql['name'],
-#             email=customer_data_from_sql['email']
-#         )
-#         record = result.single()
-#         if record:
-#             return f"Successfully loaded customer '{record['name']}' from SQL to Neo4j."
-#         else:
-#             return "Failed to load customer to Neo4j."
-
-
 # Tool 5: Generate Cypher query from natural language
 @function_tool
 def generate_cypher(request: GenerateCypherRequest) -> str:
     """
     Generate a Cypher query from a natural language question.
-    The query should be executable in a Neo4j database.
-    This tool should be used when the user asks a question that cannot be answered by the other tools.
     """
-    # Let's provide the schema to the model for better results
     schema = """
     Node properties are the following:
     - Customer {id: STRING, name: STRING, is_pep: BOOLEAN, on_watchlist: BOOLEAN}
@@ -349,54 +263,40 @@ def generate_cypher(request: GenerateCypherRequest) -> str:
     - (:Memory)-[:FOR_ACCOUNT]->(:Account)
     - (:Memory)-[:FOR_TRANSACTION]->(:Transaction)
     """
-    
+
     USER_INSTRUCTION = f"""
-    You are an expert Neo4j Cypher query writer. 
-    Your task is to write a Cypher query for a given question based *strictly* on the provided schema and tools. 
-    You must not use any node labels or relationship types that are not in the schema or tools calls.
-   
+    You are an expert Neo4j Cypher query writer.
+    Use ONLY the provided schema. Pay attention to property keys and relationship directions.
 
-    **CRITICAL RULES:**
-    1.  **Use ONLY the provided schema and tools.** Do not invent, assume, or use any node labels, relationship types, or properties that are not explicitly listed in the schema or tools calls.
-    2.  **Pay close attention to property keys.** For example, the `Alert` node has an `id` property, not `alert_id`. The `Customer` node has an `id` property, not `customer_id`. You MUST use `id`.
-    3.  **Relationships have direction.** For example, `(:Customer)-[:HAS_ALERT]->(:Alert)`. To find the customer for an alert, you must traverse the relationship backwards, like `(a:Alert)<-[:HAS_ALERT]-(c:Customer)`.
-
-    **SCHEMA:**
+    SCHEMA:
     ---
     {schema}
     ---
 
-    **EXAMPLE:**
-    *   **Question:** "Find the customer for ALERT_0007"
-    *   **Correct Cypher Query:** `MATCH (a:Alert {{id: 'ALERT_0007'}})<-[:HAS_ALERT]-(c:Customer) RETURN c`
-
-    **USER QUESTION:**
+    USER QUESTION:
     {request.question}
 
-    Write the Cypher query below:
+    Write only the Cypher query:
     """
-    
+
     logger.info(f"TOOL: GENERATE_CYPHER - INPUT - {request.question}")
 
-    user_message = USER_INSTRUCTION
     try:
-        # Generate Cypher query using the text2cypher model
         model: str = "ed-neo4j/t2c-gemma3-4b-it-q8_0-35k"
         response = chat(
             model=model,
-            messages=[{"role": "user", "content": user_message}]
+            messages=[{"role": "user", "content": USER_INSTRUCTION}]
         )
-        generated_cypher = response['message']['content']
-        # Replace \n with new line
-        generated_cypher = generated_cypher.replace("\\n", "\n")
-
+        generated_cypher = response['message']['content'].replace("\\n", "\n")
         print(f"GENERATED CYPHER: - OUTPUT - {generated_cypher}")
         return generated_cypher
-        
     except Exception as e:
         logger.error(f"Failed to generate Cypher using Ollama: {str(e)}")
-        # Return a basic fallback query
-        fallback_query = f"// Could not generate Cypher query. Ollama model '{model}' may not be available.\n// Original question: {request.question}\n// Please ensure Ollama is running and the model is installed."
+        fallback_query = (
+            f"// Could not generate Cypher query. Ollama model may not be available.\n"
+            f"// Original question: {request.question}\n"
+            f"// Please ensure Ollama is running and the model is installed."
+        )
         return fallback_query
 
 # Helper to serialize Neo4j types for JSON conversion
@@ -405,11 +305,9 @@ def neo4j_serializer(obj):
         return obj.isoformat()
     if isinstance(obj, Duration):
         return str(obj)
-    # This is a simple way to handle nodes and relationships; you might want more complex serialization
     if hasattr(obj, 'properties'):
         return dict(obj.properties)
     if isinstance(obj, dict):
-        # The record.data() returns a dict, we need to serialize its values
         return {k: neo4j_serializer(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [neo4j_serializer(i) for i in obj]
@@ -419,23 +317,18 @@ def neo4j_serializer(obj):
 def execute_cypher(query: str) -> str:
     """
     Execute a given Cypher query against the Neo4j database.
-    This tool should be used to run queries generated by 'generate_cypher' or for direct data retrieval.
-    Returns the query result as a JSON string.
+    Returns the result as a JSON string or a status message.
     """
     logger.info(f"TOOL: EXECUTE_CYPHER - Query: {query}")
     try:
         with driver.session() as session:
             result = session.run(query)
-            # result.data() gives a list of dictionaries
             records = result.data()
-            
-            # Serialize the records to handle Neo4j specific types
             serialized_records = neo4j_serializer(records)
-            
-            # Log the query for user visibility
+
             print("✅ **Cypher Query Executed:**")
             print(f"```cypher\n{query.strip()}\n```")
-            
+
             if not serialized_records:
                 return "Query executed successfully, but returned no results."
 
@@ -445,85 +338,47 @@ def execute_cypher(query: str) -> str:
         error_message = f"Error executing query: {str(e)}"
         print(f"❌ **Cypher Execution Failed:**\n{error_message}")
         return error_message
-        
+
 # Agent initialization and cleanup
 async def init_agent(use_genai_toolbox: bool = False, genai_toolbox_conn=None):
-    # This will use only the local tools which should be sufficient for basic functionality
     logger.info(f"Initializing KYC agent with GenAI Toolbox enabled: {use_genai_toolbox}")
-    
+
     base_instructions = """You are an expert KYC analyst. Your primary goal is to investigate alerts and answer questions by retrieving and analyzing data from multiple sources.
 
-    **CRITICAL INSTRUCTIONS:**
-    1.  **Be thorough and query all sources.** When asked for customer information, you MUST always query both the Neo4j knowledge graph (using tools like `get_customer_info`) AND the external SQL database (using tools like `search_sql_customer_by_name` or `search_sql_customer_by_risk_score`, if available).
-    2.  **Compare and present findings.** After querying both sources, you must present a combined view of the data. Clearly state which information came from which source (e.g., "From the Graph, I found...", "From the SQL DB, I found...").
-    3.  **Prioritize High-Level Tools:** Before generating custom Cypher, you MUST check if any of the following specific tools can directly answer the user's question. This is more efficient and reliable.
-        - `get_customer_and_accounts`: For customer details, accounts, and recent transactions.
-        - `find_customer_rings`: For finding customers in suspicious transaction rings.
-        - `is_customer_in_suspicious_ring`: To check if a specific customer is in a ring.
-        - `is_customer_bridge`: To check if a customer is employed by multiple companies.
-        - `is_customer_linked_to_hot_property`: To check if a customer is linked to a high-risk address.
-        - `get_customer_info`: For basic customer and account details from the graph.
-        - `find_shared_pii_for_alert`: To check for pre-existing PII links (phone, address, device) between customers associated with an alert.
-        - `search_sql_customer_by_risk_score`: Search for customers by risk score in the external SQL database.
-    4.  **Use Custom Cypher as a Last Resort:** Only if no specific tool can answer the question, you must follow this two-step process:
-        a. First, use the `generate_cypher` tool to create a Cypher query.
-        b. Second, use the `execute_cypher` tool to run the query you just generated.
-    5.  **Be proactive.** Do not ask for permission to run tools. Formulate a plan, execute the necessary tools, and present your findings directly.
-    6.  **Summarize your findings.** After executing tools, present the results to the user in a clear, summarized format. Always include the Cypher queries you ran in formatted code blocks.
-
-    **Available tools:**
-    - get_customer_and_accounts: Get customer details and their accounts with recent transactions from the graph.
-    - find_customer_rings: Find suspicious circular transaction patterns involving high-risk customers.
-    - create_memory: Create memory nodes to store analysis findings.
-    - load_sql_customer_to_neo4j: Load customer data from an external SQL source.
-    - update_alert_status: Update the status of an alert (e.g., 'new', 'under_review', 'closed').
-    - get_customer_info: Get detailed information for a specific customer.
-    - is_customer_in_suspicious_ring: Check if a customer is part of a transaction ring.
-    - is_customer_bridge: Check if a customer is employed by multiple companies.
-    - is_customer_linked_to_hot_property: Check if a customer is linked to a high-risk address.
-    - find_shared_pii_for_alert: Check for shared PII between customers on an alert.
-    - generate_cypher: **(Step 1 for custom questions)** Generate a Cypher query from a natural language question.
-    - execute_cypher: **(Step 2 for custom questions)** Execute a Cypher query to get data from the database."""
+    CRITICAL INSTRUCTIONS:
+    1. Be thorough and query all sources when relevant.
+    2. Compare and present findings with source attribution.
+    3. Prefer high-level tools first; fall back to generate_cypher + execute_cypher last.
+    4. Be proactive and summarize results with queries shown."""
 
     tools = [
-        get_customer_and_accounts, 
-        find_customer_rings, 
-        create_memory, 
-        generate_cypher, 
+        get_customer_and_accounts,
+        find_customer_rings,
+        create_memory,
+        generate_cypher,
         update_alert_status,
         get_customer_info,
         is_customer_in_suspicious_ring,
         is_customer_bridge,
         is_customer_linked_to_hot_property,
         find_shared_pii_for_alert,
-        execute_cypher
+        execute_cypher,
     ]
 
-    # Conditionally add the new tool and update instructions
     if use_genai_toolbox and genai_toolbox_conn:
-        
         @function_tool
         def search_sql_customer_by_name(input: SearchSqlCustomerInput) -> str:
-            """
-            Search for customers by name in the external SQL database using the GenAI Toolbox connection.
-            Use this tool to find customer information that might not be in the graph database.
-            """
             logger.info(f"TOOL: SEARCH_SQL_CUSTOMER_BY_NAME - Name: {input.name}")
-            
             conn = genai_toolbox_conn
             if conn is None:
                 return "Error: GenAI Toolbox connection is not available."
-
             try:
                 result = conn.call_tool(tool_name="search-customers-by-name", args={"name": input.name})
-                
-                # Check if the tool call was successful and returned data
                 if result and "data" in result:
                     data = result["data"]
                     if data:
-                        print(f"✅ **MCP Response:**")
+                        print("✅ **MCP Response:**")
                         print(f"```json\n{json.dumps(data, indent=2)}\n```")
-                        # Persist latest SQL result for the Streamlit UI to render
                         try:
                             import streamlit as st  # type: ignore
                             st.session_state["last_sql_result"] = data
@@ -531,40 +386,28 @@ async def init_agent(use_genai_toolbox: bool = False, genai_toolbox_conn=None):
                         except Exception:
                             pass
                         return f"Successfully found customer data in the SQL database: {json.dumps(data, indent=2)}"
-                    else:
-                        return "No customers found with that name in the SQL database."
-                # Handle cases where the tool returns an error
+                    return "No customers found with that name in the SQL database."
                 elif result and "error" in result:
                     return f"Error from GenAI Toolbox: {result['error']}"
-                # Handle unexpected response formats
-                else:
-                    return f"Received an unexpected response from the GenAI Toolbox: {result}"
-                    
+                return f"Received an unexpected response from the GenAI Toolbox: {result}"
             except Exception as e:
-                error_msg = f"An unexpected error occurred while querying the SQL database: {e}"
-                logger.error(error_msg)
-                return error_msg
+                msg = f"An unexpected error occurred while querying the SQL database: {e}"
+                logger.error(msg)
+                return msg
 
         @function_tool
         def search_sql_customer_by_risk_score(input: SearchSqlCustomerByRiskInput) -> str:
-            """
-            Search for customers by risk score in the external SQL database.
-            """
             logger.info(f"TOOL: SEARCH_SQL_CUSTOMER_BY_RISK_SCORE - Score: {input.risk_score}")
-            
             conn = genai_toolbox_conn
             if conn is None:
                 return "Error: GenAI Toolbox connection is not available."
-
             try:
                 result = conn.call_tool(tool_name="search-customers-by-risk-score", args={"risk_score": input.risk_score})
-                
                 if result and "data" in result:
                     data = result["data"]
                     if data:
-                        print(f"✅ **MCP Response:**")
+                        print("✅ **MCP Response:**")
                         print(f"```json\n{json.dumps(data, indent=2)}\n```")
-                        # Persist latest SQL result for the Streamlit UI to render
                         try:
                             import streamlit as st  # type: ignore
                             st.session_state["last_sql_result"] = data
@@ -572,20 +415,18 @@ async def init_agent(use_genai_toolbox: bool = False, genai_toolbox_conn=None):
                         except Exception:
                             pass
                         return f"Successfully found customers with risk score >= {input.risk_score}: {json.dumps(data, indent=2)}"
-                    else:
-                        return f"No customers found with risk score >= {input.risk_score} in the SQL database."
+                    return f"No customers found with risk score >= {input.risk_score} in the SQL database."
                 elif result and "error" in result:
                     return f"Error from GenAI Toolbox: {result['error']}"
-                else:
-                    return f"Received an unexpected response from the GenAI Toolbox: {result}"
+                return f"Received an unexpected response from the GenAI Toolbox: {result}"
             except Exception as e:
-                error_msg = f"An unexpected error occurred while querying the SQL database: {e}"
-                logger.error(error_msg)
-                return error_msg
+                msg = f"An unexpected error occurred while querying the SQL database: {e}"
+                logger.error(msg)
+                return msg
 
         tools.append(search_sql_customer_by_name)
         tools.append(search_sql_customer_by_risk_score)
-        instructions = base_instructions + "\n    - search_sql_customer_by_name: Search for customers by name in the external SQL database."
+        instructions = base_instructions + "\n- SQL search tools enabled via GenAI Toolbox."
         logger.info("GenAI Toolbox (PostgreSQL) tool has been enabled.")
     else:
         instructions = base_instructions
@@ -599,13 +440,12 @@ async def init_agent(use_genai_toolbox: bool = False, genai_toolbox_conn=None):
     _dump_agent_state(kyc_agent, label="post-construct")
     return kyc_agent
 
-
 async def run_agent(agent: Agent, query: str, conversation_history: list):
     if agent is None:
         raise RuntimeError("run_agent() received agent=None")
     _dump_agent_state(agent, label="pre-run")
     result = await Runner.run(
-        agent, 
+        agent,
         conversation_history + [{"role": "user", "content": query}]
     )
     return result.final_output
@@ -613,10 +453,4 @@ async def run_agent(agent: Agent, query: str, conversation_history: list):
 async def cleanup_agent():
     driver.close()
 
-# The CLI part is removed, and will be replaced by Streamlit integration.
-# async def main():
-#    ... (old CLI code) ...
-#
-# if __name__ == "__main__":
-#    ... (old CLI code) ... 
-        
+# CLI removed; Streamlit will own execution.

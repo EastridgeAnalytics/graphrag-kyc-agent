@@ -2,8 +2,8 @@ services:
   neo4j:
     image: neo4j:5.20.0
     environment:
-        - NEO4J_AUTH=neo4j/password
-        - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc"]
     ports:
       - "7474:7474"
       - "7687:7687"
@@ -43,3 +43,4 @@ services:
       neo4j:
         condition: service_healthy
     restart: unless-stopped
+
