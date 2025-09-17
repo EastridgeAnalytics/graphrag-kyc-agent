@@ -523,6 +523,13 @@ async def init_agent(use_genai_toolbox: bool = False, genai_toolbox_conn=None):
                     if data:
                         print(f"✅ **MCP Response:**")
                         print(f"```json\n{json.dumps(data, indent=2)}\n```")
+                        # Persist latest SQL result for the Streamlit UI to render
+                        try:
+                            import streamlit as st  # type: ignore
+                            st.session_state["last_sql_result"] = data
+                            st.session_state["last_sql_tool"] = "search-customers-by-name"
+                        except Exception:
+                            pass
                         return f"Successfully found customer data in the SQL database: {json.dumps(data, indent=2)}"
                     else:
                         return "No customers found with that name in the SQL database."
@@ -557,6 +564,13 @@ async def init_agent(use_genai_toolbox: bool = False, genai_toolbox_conn=None):
                     if data:
                         print(f"✅ **MCP Response:**")
                         print(f"```json\n{json.dumps(data, indent=2)}\n```")
+                        # Persist latest SQL result for the Streamlit UI to render
+                        try:
+                            import streamlit as st  # type: ignore
+                            st.session_state["last_sql_result"] = data
+                            st.session_state["last_sql_tool"] = "search-customers-by-risk-score"
+                        except Exception:
+                            pass
                         return f"Successfully found customers with risk score >= {input.risk_score}: {json.dumps(data, indent=2)}"
                     else:
                         return f"No customers found with risk score >= {input.risk_score} in the SQL database."

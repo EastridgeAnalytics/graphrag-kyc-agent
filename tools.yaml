@@ -28,7 +28,23 @@ tools:
         description: "The minimum risk score to search for."
     statement: "SELECT * FROM customers WHERE risk_score >= $1;"
 
+  get-transactions-for-customer:
+    kind: postgres-sql
+    source: my-pg-source
+    description: "Fetch recent transactions for a given customer id from the SQL database."
+    parameters:
+      - name: customer_id
+        type: string
+        description: "The customer id to fetch transactions for."
+    statement: |
+      SELECT id, from_customer, to_customer, amount, transaction_date
+      FROM transactions
+      WHERE from_customer = $1 OR to_customer = $1
+      ORDER BY transaction_date DESC
+      LIMIT 50;
+
 toolsets:
     sql_tools:
         - search-customers-by-name
         - search-customers-by-risk-score
+        - get-transactions-for-customer

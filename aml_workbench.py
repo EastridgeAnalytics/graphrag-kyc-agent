@@ -392,11 +392,28 @@ with right_col:
                     st.subheader("Recent Transactions")
                     customer_id = get_customer_for_alert(selected_alerts[0].id)
                     if customer_id:
-                        transactions_df = get_transactions_for_customer(customer_id)
-                        if not transactions_df.empty:
-                            st.bar_chart(transactions_df[['debit', 'credit']])
-                        else:
-                            st.write("No transactions for customer.")
+                        tab_sql, = st.tabs(["SQL (Postgres)"])
+
+
+                        # SQL (Postgres) transactions via GenAI Toolbox
+                        with tab_sql:
+                            if genai_toolbox_healthy:
+                                sql_resp = conn_toolbox.call_tool(
+                                    tool_name="get-transactions-for-customer",
+                                    args={"customer_id": customer_id}
+                                )
+                                sql_rows = sql_resp.get("data", []) if isinstance(sql_resp, dict) else []
+                                # Prefer agent-fetched latest SQL data if present (keeps the UI in sync with Copilot)
+                                latest_sql = st.session_state.get("last_sql_result")
+                                if isinstance(latest_sql, list) and latest_sql:
+                                    sql_rows = latest_sql
+                                if sql_rows:
+                                    sql_df = pd.DataFrame(sql_rows)
+                                    st.dataframe(sql_df, use_container_width=True)
+                                else:
+                                    st.write("No SQL transactions for customer.")
+                            else:
+                                st.info("Postgres connection is not available.")
 
     elif st.session_state.selected_sar_id:
         sar_id = st.session_state.selected_sar_id
