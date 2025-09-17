@@ -1,0 +1,91 @@
+I need to create a MCP server for the PostgreSQL database.
+
+
+context resources:
+@this repo 
+@ this file from my codebase
+@ this file from other repos
+@ this documentation
+@ this screenshot
+@ this video https://hcwei13.github.io/Visual-Context-Window-Extension/
+
+
+
+
+The MCP server should be able to handle the following:
+
+- Search for customers by name
+- Search for accounts by customer ID
+- Search for transactions by account ID
+- Search for transactions by customer ID
+- Search for transactions by account ID (example: )
+
+
+
+---
+
+can you see what is in the postgressql customer dm on localhost 5000?
+
+
+are we using the genai toolbox or mcp-playground as our archtectureal implementation?
+
+
+you are deleteing a ton of code that is vaulable system prompts and what not.
+
+Why couldn't we have done this with genai toolbox?
+
+
+echo -e "\n=== Get genai-toolbox container IP directly ==="
+docker inspect graphrag-kyc-agent-genai_toolbox-1
+ --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+
+echo -e "\n=== Alternative method to get IP ==="
+docker inspect graphrag-kyc-agent-genai_toolbox-1 | grep -i ipaddress
+
+echo -e "\n=== Check port mapping ==="
+docker port graphrag-kyc-agent-genai_toolbox-1
+
+echo -e "\n=== Test connectivity from host to container ==="
+CONTAINER_IP=$(docker inspect graphrag-kyc-agent-genai_toolbox-1 --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+echo "Container IP: $CONTAINER_IP"
+
+if [ ! -z "$CONTAINER_IP" ]; then
+    echo "Testing connection to container IP..."
+    curl -v http://$CONTAINER_IP:5000/health 2>&1 || echo "Direct IP connection failed"
+    
+    echo -e "\nTesting localhost connection..."
+    curl -v http://localhost:5000/health 2>&1 || echo "Localhost connection failed"
+    
+    echo -e "\nTesting 127.0.0.1 connection..."
+    curl -v http://127.0.0.1:5000/health 2>&1 || echo "127.0.0.1 connection failed"
+else
+    echo "Could not retrieve container IP"
+fi
+
+echo -e "\n=== Check what's listening on port 5000 ==="
+# For Linux/Mac
+netstat -tulpn 2>/dev/null | grep :5000 || echo "netstat not available or no listeners on port 5000"
+
+# Alternative for systems without netstat
+ss -tulpn 2>/dev/null | grep :5000 || echo "ss not available or no listeners on port 5000"
+
+# For Mac users
+lsof -i :5000 2>/dev/null || echo "lsof not available or no listeners on port 5000"
+
+
+
+
+Great — the SQL tools are visible. Ask the copilot things that map directly to the two SQL tools we exposed:
+Find a customer by name (uses search-customers-by-name)
+“Find ‘John Smith’ in the SQL DB and return id, email, phone, address, risk_score.”
+“Search SQL for customers with name containing ‘John’ and show all columns.”
+Find high‑risk customers (uses search-customers-by-risk-score)
+“Find customers with a risk_score ≥ 8 and list id, name, email, phone, address.”
+“List customers with risk_score ≥ 9 and sort by risk_score desc.”
+Cross‑source checks (forces graph + SQL comparison per agent instructions)
+“Compare ‘John Smith’ between SQL and the Neo4j graph; show differences.”
+“For SQL customers with risk_score ≥ 8, check the graph for alerts and summarize.”
+Expected hits from your SQL seed:
+John Smith (CUST_06595, risk 8)
+Michael Chen (CUST_01819, risk 9)
+Copy/paste one of the prompts above into the KYC Copilot chat.

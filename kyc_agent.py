@@ -1,30 +1,47 @@
+# --- DEBUG HELPERS (paste once per file while debugging) ---
+import traceback, logging
+dbg = logging.getLogger("AGENT_DBG")
+dbg.setLevel(logging.INFO)
+
+def _assert_mcp_list(agent):
+    ms = getattr(agent, "mcp_servers", None)
+    # If the SDK leaves this as None when absent, that's OK. We only forbid [None] etc.
+    if ms is None:
+        return
+    if not isinstance(ms, (list, tuple)):
+        raise RuntimeError(f"mcp_servers must be list|tuple, got {type(ms)}")
+    bad = [i for i, s in enumerate(ms) if s is None]
+    if bad:
+        where = "".join(traceback.format_stack(limit=8))
+        raise RuntimeError(f"mcp_servers contains None at indexes {bad}\nStack:\n{where}")
+
+def _dump_agent_state(agent, label=""):
+    tools = [getattr(t, "name", repr(t)) for t in getattr(agent, "tools", [])]
+    mcp = getattr(agent, "mcp_servers", None)
+    dbg.info("AGENT_STATE %s tools=%s", label, tools)
+    dbg.info("AGENT_STATE %s mcp_servers=%s", label, mcp)
+# --- END DEBUG HELPERS ---
+
+
 import os
 from agents import Agent, Runner, function_tool
-from agents.mcp import MCPServerStdio, MCPServer
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
-from schemas import CustomerAccountsInput, CustomerAccountsOutput, CustomerModel, AccountModel, TransactionModel, GenerateCypherRequest, LoadSqlCustomerToNeo4jInput
+from schemas import (
+    CustomerAccountsInput, CustomerAccountsOutput, CustomerModel, AccountModel, 
+    TransactionModel, GenerateCypherRequest, SearchSqlCustomerInput, 
+    IngestSqlCustomerInput, GetTransactionsForAlertInput, UpdateAlertStatusInput,
+    CustomerRingsOutput, RingModel, SearchSqlCustomerByRiskInput
+)
 from kyc_cypher_tools import get_customer_info, find_customers_in_rings, is_customer_in_suspicious_ring, is_customer_bridge, is_customer_linked_to_hot_property, find_shared_pii_for_alert
 import asyncio
-from pydantic import BaseModel, Field
 from ollama import chat
 import logging
 from neo4j.time import DateTime, Date, Time, Duration
 import json
 import httpx
-
-# New Input Schema for the new tool
-class UpdateAlertStatusInput(BaseModel):
-    alert_id: str = Field(..., description="The ID of the alert to update.")
-    status: str = Field(..., description="The new status for the alert (e.g., 'under_review', 'closed', 'forwarded').")
-
-# New Input Schema for the new tool
-class LoadSqlCustomerToNeo4jInput(BaseModel):
-    customer_name: str = Field(..., description="The name of the customer to load from SQL database to Neo4j.")
-
-# New Input Schema for the new tool
-class SearchSqlCustomerInput(BaseModel):
-    name: str = Field(..., description="The name of the customer to search for in the SQL database.")
+import sys
+import functools
 
 # Configure logging
 logging.basicConfig(
@@ -105,7 +122,7 @@ def get_customer_and_accounts(input: CustomerAccountsInput, tx_limit: int = 5) -
 
 # Tool 2: Identify watchlisted customers in suspicious rings
 @function_tool 
-def find_customer_rings(max_number_rings: int = 10, customer_in_watchlist: bool = True, customer_is_pep: bool = False, customer_id: str = None):
+def find_customer_rings(max_number_rings: int = 10, customer_in_watchlist: bool = True, customer_is_pep: bool = False, customer_id: str = None) -> CustomerRingsOutput:
     """
     Detects circular transaction patterns (up to 6 hops) involving high-risk customers.
     
@@ -119,7 +136,7 @@ def find_customer_rings(max_number_rings: int = 10, customer_in_watchlist: bool 
         customer_id: Specific customer to focus on (not implemented)
     
     Returns:
-        dict: Contains ring paths and associated high-risk customers
+        CustomerRingsOutput: Contains ring paths and associated high-risk customers
     """
     logger.info(f"TOOL: FIND_CUSTOMER_RINGS - {max_number_rings} - {customer_in_watchlist} - {customer_is_pep}")
     
@@ -158,35 +175,15 @@ def find_customer_rings(max_number_rings: int = 10, customer_in_watchlist: bool 
             path_nodes = [dict(node) for node in record["p"].nodes]
             watched_customers = [dict(cust) for cust in record["watchedCustomers"]]
             watch_rels = [dict(rel) for rel in record["watchRels"]]
-            rings.append({
-                "ring_path": path_nodes,
-                "watched_customers": watched_customers,
-                
-            })
+            rings.append(RingModel(
+                ring_path=path_nodes,
+                watched_customers=watched_customers,
+                watch_relationships=watch_rels
+            ))
         
-        return {"customer_rings": rings}
+        return CustomerRingsOutput(customer_rings=rings)
 
-# Tool 3: Neo4j MCP server setup
-neo4j_mcp_server = MCPServerStdio(
-    params={
-        "command": "mcp-neo4j-cypher",
-        "args": [],
-        "env": {
-            "NEO4J_URI": NEO4J_URI,
-            "NEO4J_USERNAME": NEO4J_USER,
-            "NEO4J_PASSWORD": NEO4J_PASSWORD,
-            "NEO4J_DATABASE": NEO4J_DATABASE,
-        },
-    },
-    cache_tools_list=True,
-    name="Neo4j MCP Server",
-    client_session_timeout_seconds=20
-)
-
-# GenAI Toolbox MCP Server setup - TODO: Implement HTTP MCP client
-# genai_toolbox_mcp_server = None  # Temporarily disabled
-
-# Tool 4: Create Memory node and link it to entities
+# Tool 3: Create Memory node and link it to entities
 @function_tool
 def create_memory(content: str, customer_ids: list[str] = [], account_ids: list[str] = [], transaction_ids: list[str] = []) -> str:
     """
@@ -258,59 +255,60 @@ def update_alert_status(input: UpdateAlertStatusInput) -> str:
             return f"Failed to update alert '{input.alert_id}'. It might not exist in the database."
 
 # Tool to load customer from SQL to Neo4j
-@function_tool
-def load_sql_customer_to_neo4j(input: LoadSqlCustomerToNeo4jInput) -> str:
-    """
-    Loads a customer's data from the SQL database and ingests it into Neo4j.
-    First, it searches for the customer in the SQL database using the search-customers-by-name tool.
-    Then, it creates or updates the customer's node in Neo4j.
-    """
-    logger.info(f"TOOL: LOAD_SQL_CUSTOMER_TO_NEO4J - {input.customer_name}")
+# This function is now obsolete as ingestion is handled by ingest_sql_customer_by_name
+# @function_tool
+# def load_sql_customer_to_neo4j(input: LoadSqlCustomerToNeo4jInput) -> str:
+#     """
+#     Loads a customer's data from the SQL database and ingests it into Neo4j.
+#     First, it searches for the customer in the SQL database using the search-customers-by-name tool.
+#     Then, it creates or updates the customer's node in Neo4j.
+#     """
+#     logger.info(f"TOOL: LOAD_SQL_CUSTOMER_TO_NEO4J - {input.customer_name}")
 
-    # This is a placeholder for how you would call the tool through the agent/runner.
-    # In a real scenario, the agent would decide to call this tool first,
-    # and then we'd get the result. For this tool, we'll simulate this process.
-    # A more advanced implementation could involve the tool_runner directly.
+#     # This is a placeholder for how you would call the tool through the agent/runner.
+#     # In a real scenario, the agent would decide to call this tool first,
+#     # and then we'd get the result. For this tool, we'll simulate this process.
+#     # A more advanced implementation could involve the tool_runner directly.
 
-    # The agent would first use the 'search-customers-by-name' tool.
-    # Let's assume the agent has run that and we have the result here.
-    # For this example, we'll just log that this is what should happen.
-    logger.info(f"Agent would now call 'search-customers-by-name' with name '{input.customer_name}' through the GenAI Toolbox MCP Server.")
-    logger.info("For this demo, we will assume the tool returns a customer and we will proceed with ingestion.")
+#     # The agent would first use the 'search-customers-by-name' tool.
+#     # Let's assume the agent has run that and we have the result here.
+#     # For this example, we'll just log that this is what should happen.
+#     logger.info(f"Agent would now call 'search-customers-by-name' with name '{input.customer_name}' through the GenAI Toolbox MCP Server.")
+#     logger.info("For this demo, we will assume the tool returns a customer and we will proceed with ingestion.")
     
-    # In a real implementation, you would get the customer data from the tool call.
-    # Here is some hardcoded example data that would be returned from the tool.
-    customer_data_from_sql = {
-        'id': '3',
-        'name': input.customer_name,
-        'email': f'{input.customer_name.lower().replace(" ", ".")}@email.com'
-    }
+#     # In a real implementation, you would get the customer data from the tool call.
+#     # Here is some hardcoded example data that would be returned from the tool.
+#     customer_data_from_sql = {
+#         'id': '3',
+#         'name': input.customer_name,
+#         'email': f'{input.customer_name.lower().replace(" ", ".")}@email.com'
+#     }
 
-    # Now, ingest this data into Neo4j
-    cypher_query = """
-    MERGE (c:Customer {id: $id})
-    ON CREATE SET c.name = $name, c.email = $email, c.source = 'sql'
-    ON MATCH SET c.name = $name, c.email = $email, c.source = 'sql'
-    RETURN c.name as name
-    """
+#     # Now, ingest this data into Neo4j
+#     cypher_query = """
+#     MERGE (c:Customer {id: $id})
+#     ON CREATE SET c.name = $name, c.email = $email, c.source = 'sql'
+#     ON MATCH SET c.name = $name, c.email = $email, c.source = 'sql'
+#     RETURN c.name as name
+#     """
     
-    # Log the Cypher query for user visibility
-    print("🔍 **Cypher Query Executed:**")
-    print(f"```cypher\n{cypher_query.strip()}\n```")
-    print(f"**Parameters:** id='{customer_data_from_sql['id']}', name='{customer_data_from_sql['name']}', email='{customer_data_from_sql['email']}'")
+#     # Log the Cypher query for user visibility
+#     print("🔍 **Cypher Query Executed:**")
+#     print(f"```cypher\n{cypher_query.strip()}\n```")
+#     print(f"**Parameters:** id='{customer_data_from_sql['id']}', name='{customer_data_from_sql['name']}', email='{customer_data_from_sql['email']}'")
     
-    with driver.session() as session:
-        result = session.run(
-            cypher_query,
-            id=customer_data_from_sql['id'],
-            name=customer_data_from_sql['name'],
-            email=customer_data_from_sql['email']
-        )
-        record = result.single()
-        if record:
-            return f"Successfully loaded customer '{record['name']}' from SQL to Neo4j."
-        else:
-            return "Failed to load customer to Neo4j."
+#     with driver.session() as session:
+#         result = session.run(
+#             cypher_query,
+#             id=customer_data_from_sql['id'],
+#             name=customer_data_from_sql['name'],
+#             email=customer_data_from_sql['email']
+#         )
+#         record = result.single()
+#         if record:
+#             return f"Successfully loaded customer '{record['name']}' from SQL to Neo4j."
+#         else:
+#             return "Failed to load customer to Neo4j."
 
 
 # Tool 5: Generate Cypher query from natural language
@@ -448,67 +446,33 @@ def execute_cypher(query: str) -> str:
         print(f"❌ **Cypher Execution Failed:**\n{error_message}")
         return error_message
         
-@function_tool
-def search_sql_customer_by_name(input: SearchSqlCustomerInput) -> str:
-    """
-    Search for customers by name in the external SQL database.
-    Use this tool to find customer information that might not be in the graph database.
-    """
-    logger.info(f"TOOL: SEARCH_SQL_CUSTOMER_BY_NAME - Name: {input.name}")
-    
-    # The genai-toolbox server is running on localhost:5000 from docker-compose
-    url = "http://localhost:5000/tools/search-customers-by-name:call"
-    payload = {"args": {"name": input.name}}
-    
-    try:
-        with httpx.Client() as client:
-            response = client.post(url, json=payload, timeout=10.0)
-            response.raise_for_status() # Raise an exception for bad status codes
-            
-        result = response.json()
-        # The result from genai-toolbox is a list of dictionaries.
-        # We should format it nicely for the agent.
-        if "returns" in result and result["returns"]:
-            return json.dumps(result["returns"], indent=2)
-        else:
-            return "No customers found with that name in the SQL database."
-    except httpx.ConnectError:
-        error_msg = "Error: Could not connect to the GenAI Toolbox server at http://localhost:5000. Please ensure the 'genai_toolbox' Docker container is running."
-        logger.error(error_msg)
-        return error_msg
-    except httpx.RequestError as e:
-        error_msg = f"Error connecting to the GenAI Toolbox server: {e}"
-        logger.error(error_msg)
-        return error_msg
-    except Exception as e:
-        error_msg = f"An unexpected error occurred while querying the SQL database: {e}"
-        logger.error(error_msg)
-        return error_msg
-
 # Agent initialization and cleanup
-async def init_agent(use_genai_toolbox: bool = False):
+async def init_agent(use_genai_toolbox: bool = False, genai_toolbox_conn=None):
     # This will use only the local tools which should be sufficient for basic functionality
     logger.info(f"Initializing KYC agent with GenAI Toolbox enabled: {use_genai_toolbox}")
     
-    base_instructions = """You are an expert KYC analyst. Your primary goal is to investigate alerts and answer questions by retrieving and analyzing data from a Neo4j knowledge graph.
+    base_instructions = """You are an expert KYC analyst. Your primary goal is to investigate alerts and answer questions by retrieving and analyzing data from multiple sources.
 
     **CRITICAL INSTRUCTIONS:**
-    1.  **Prioritize High-Level Tools:** Before generating custom Cypher, you MUST check if any of the following specific tools can directly answer the user's question. This is more efficient and reliable.
+    1.  **Be thorough and query all sources.** When asked for customer information, you MUST always query both the Neo4j knowledge graph (using tools like `get_customer_info`) AND the external SQL database (using tools like `search_sql_customer_by_name` or `search_sql_customer_by_risk_score`, if available).
+    2.  **Compare and present findings.** After querying both sources, you must present a combined view of the data. Clearly state which information came from which source (e.g., "From the Graph, I found...", "From the SQL DB, I found...").
+    3.  **Prioritize High-Level Tools:** Before generating custom Cypher, you MUST check if any of the following specific tools can directly answer the user's question. This is more efficient and reliable.
         - `get_customer_and_accounts`: For customer details, accounts, and recent transactions.
-        - `find_customers_in_rings`: For finding customers in suspicious transaction rings.
+        - `find_customer_rings`: For finding customers in suspicious transaction rings.
         - `is_customer_in_suspicious_ring`: To check if a specific customer is in a ring.
         - `is_customer_bridge`: To check if a customer is employed by multiple companies.
-        - `is_customer_linked_to_hot_property`: To check if a customer lives at a high-risk address.
-        - `get_customer_info`: For basic customer and account details.
+        - `is_customer_linked_to_hot_property`: To check if a customer is linked to a high-risk address.
+        - `get_customer_info`: For basic customer and account details from the graph.
         - `find_shared_pii_for_alert`: To check for pre-existing PII links (phone, address, device) between customers associated with an alert.
-    2.  **Use Custom Cypher as a Last Resort:** Only if no specific tool can answer the question, you must follow this two-step process:
+        - `search_sql_customer_by_risk_score`: Search for customers by risk score in the external SQL database.
+    4.  **Use Custom Cypher as a Last Resort:** Only if no specific tool can answer the question, you must follow this two-step process:
         a. First, use the `generate_cypher` tool to create a Cypher query.
         b. Second, use the `execute_cypher` tool to run the query you just generated.
-    3.  **Be proactive.** Do not ask for permission to run tools. Formulate a plan, execute the necessary tools, and present your findings directly.
-    4.  **Summarize your findings.** After executing tools, present the results to the user in a clear, summarized format. Always include the Cypher queries you ran in formatted code blocks.
+    5.  **Be proactive.** Do not ask for permission to run tools. Formulate a plan, execute the necessary tools, and present your findings directly.
+    6.  **Summarize your findings.** After executing tools, present the results to the user in a clear, summarized format. Always include the Cypher queries you ran in formatted code blocks.
 
     **Available tools:**
-    - get_customer_and_accounts: Get customer details and their accounts with recent transactions.
+    - get_customer_and_accounts: Get customer details and their accounts with recent transactions from the graph.
     - find_customer_rings: Find suspicious circular transaction patterns involving high-risk customers.
     - create_memory: Create memory nodes to store analysis findings.
     - load_sql_customer_to_neo4j: Load customer data from an external SQL source.
@@ -526,7 +490,6 @@ async def init_agent(use_genai_toolbox: bool = False):
         find_customer_rings, 
         create_memory, 
         generate_cypher, 
-        load_sql_customer_to_neo4j,
         update_alert_status,
         get_customer_info,
         is_customer_in_suspicious_ring,
@@ -537,8 +500,77 @@ async def init_agent(use_genai_toolbox: bool = False):
     ]
 
     # Conditionally add the new tool and update instructions
-    if use_genai_toolbox:
+    if use_genai_toolbox and genai_toolbox_conn:
+        
+        @function_tool
+        def search_sql_customer_by_name(input: SearchSqlCustomerInput) -> str:
+            """
+            Search for customers by name in the external SQL database using the GenAI Toolbox connection.
+            Use this tool to find customer information that might not be in the graph database.
+            """
+            logger.info(f"TOOL: SEARCH_SQL_CUSTOMER_BY_NAME - Name: {input.name}")
+            
+            conn = genai_toolbox_conn
+            if conn is None:
+                return "Error: GenAI Toolbox connection is not available."
+
+            try:
+                result = conn.call_tool(tool_name="search-customers-by-name", args={"name": input.name})
+                
+                # Check if the tool call was successful and returned data
+                if result and "data" in result:
+                    data = result["data"]
+                    if data:
+                        print(f"✅ **MCP Response:**")
+                        print(f"```json\n{json.dumps(data, indent=2)}\n```")
+                        return f"Successfully found customer data in the SQL database: {json.dumps(data, indent=2)}"
+                    else:
+                        return "No customers found with that name in the SQL database."
+                # Handle cases where the tool returns an error
+                elif result and "error" in result:
+                    return f"Error from GenAI Toolbox: {result['error']}"
+                # Handle unexpected response formats
+                else:
+                    return f"Received an unexpected response from the GenAI Toolbox: {result}"
+                    
+            except Exception as e:
+                error_msg = f"An unexpected error occurred while querying the SQL database: {e}"
+                logger.error(error_msg)
+                return error_msg
+
+        @function_tool
+        def search_sql_customer_by_risk_score(input: SearchSqlCustomerByRiskInput) -> str:
+            """
+            Search for customers by risk score in the external SQL database.
+            """
+            logger.info(f"TOOL: SEARCH_SQL_CUSTOMER_BY_RISK_SCORE - Score: {input.risk_score}")
+            
+            conn = genai_toolbox_conn
+            if conn is None:
+                return "Error: GenAI Toolbox connection is not available."
+
+            try:
+                result = conn.call_tool(tool_name="search-customers-by-risk-score", args={"risk_score": input.risk_score})
+                
+                if result and "data" in result:
+                    data = result["data"]
+                    if data:
+                        print(f"✅ **MCP Response:**")
+                        print(f"```json\n{json.dumps(data, indent=2)}\n```")
+                        return f"Successfully found customers with risk score >= {input.risk_score}: {json.dumps(data, indent=2)}"
+                    else:
+                        return f"No customers found with risk score >= {input.risk_score} in the SQL database."
+                elif result and "error" in result:
+                    return f"Error from GenAI Toolbox: {result['error']}"
+                else:
+                    return f"Received an unexpected response from the GenAI Toolbox: {result}"
+            except Exception as e:
+                error_msg = f"An unexpected error occurred while querying the SQL database: {e}"
+                logger.error(error_msg)
+                return error_msg
+
         tools.append(search_sql_customer_by_name)
+        tools.append(search_sql_customer_by_risk_score)
         instructions = base_instructions + "\n    - search_sql_customer_by_name: Search for customers by name in the external SQL database."
         logger.info("GenAI Toolbox (PostgreSQL) tool has been enabled.")
     else:
@@ -547,12 +579,17 @@ async def init_agent(use_genai_toolbox: bool = False):
     kyc_agent = Agent(
         name="KYC Analyst",
         instructions=instructions,
-        tools=tools,
-        mcp_servers=[]  # No MCP servers for now to avoid connection issues
+        tools=tools
     )
+    _assert_mcp_list(kyc_agent)
+    _dump_agent_state(kyc_agent, label="post-construct")
     return kyc_agent
 
+
 async def run_agent(agent: Agent, query: str, conversation_history: list):
+    if agent is None:
+        raise RuntimeError("run_agent() received agent=None")
+    _dump_agent_state(agent, label="pre-run")
     result = await Runner.run(
         agent, 
         conversation_history + [{"role": "user", "content": query}]
@@ -560,8 +597,6 @@ async def run_agent(agent: Agent, query: str, conversation_history: list):
     return result.final_output
 
 async def cleanup_agent():
-    await neo4j_mcp_server.cleanup()
-    # await genai_toolbox_mcp_server.cleanup()  # Temporarily disabled
     driver.close()
 
 # The CLI part is removed, and will be replaced by Streamlit integration.

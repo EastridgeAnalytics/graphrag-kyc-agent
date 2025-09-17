@@ -147,9 +147,32 @@ Test the agent tools with these example questions:
 
 6. Velocity of transactions:
    ```
-   I'm reviewing alert 716d, and i'm wondering whats going on. why was this alert created? is there any pii linking those customers prior to these new links connected via phone?
+   I'm reviewing alert ####, and i'm wondering whats going on. why was this alert created? is there any pii linking those customers prior to these new links connected via phone?
    ```
    This tests the `get_customer_and_accounts` tool.
+
+
+   misc:
+   ustomer & Relationship Analysis
+Who are the customers involved in ALERT_VEL_68ED?
+What are the profiles and risk ratings of these customers?
+Are any of these customers politically exposed persons (PEPs) or on a watchlist?
+Are any customers linked to high-risk ("hot") properties or multiple employers?
+Are there new or unusual relationships forming between these customers?
+What PII (phone, address, device) do these customers share, either pre-existing or new?
+Transaction Analysis
+What transactions (amount, pattern, direction) triggered this alert?
+Are there suspicious transaction patterns such as rings, bridges, or circular flows involving these customers?
+Do the customers transact unusually large or structured amounts?
+Have these accounts recently shown new activity or relationships that differ from their previous behavior?
+Historical Context & Risk
+Have any of these customers or accounts been flagged in previous alerts?
+What is the transaction history and account activity for each involved party?
+Is there evidence of layering, smurfing, or other money laundering typologies?
+Other
+How much money is at risk or has moved in these transactions?
+Are there external factors (e.g., change of address, employer, or phone number) associated with these customers?
+
 
 
 

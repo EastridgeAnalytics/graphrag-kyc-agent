@@ -15,6 +15,12 @@ from aml_workbench_utils import (
 from streamlit_agraph import agraph, Node, Edge, Config
 from kyc_agent import init_agent, run_agent, cleanup_agent
 import asyncio
+from connections import Neo4jConnection, GenAIToolboxConnection
+import logging
+
+# Configure logging for the UI
+log = logging.getLogger("UI")
+log.setLevel(logging.INFO)
 
 
 # Set page config
@@ -23,16 +29,50 @@ st.set_page_config(page_title="AML Analyst Workbench", layout="wide")
 # Add a sidebar for data source configuration
 with st.sidebar:
     st.header("🔗 Data Source Connections")
-    st.info("Enable connections to external data sources for the agent.")
-    
-    # Checkbox state is managed by session_state
-    use_genai_toolbox = st.checkbox(
-        "Enable PostgreSQL Database",
-        key='use_genai_toolbox', # Use key to bind to session_state
-        help="Connects to the PostgreSQL customer database via GenAI Toolbox."
-    )
+    st.info("The KYC Copilot can connect to these external data sources on command.")
 
-    st.caption("Changes will apply on the next conversation turn.")
+    # Establish the connection to the Neo4j Database
+    conn_neo4j = st.connection("neo4j", type=Neo4jConnection)
+    
+    # Check Neo4j health using the connection object
+    neo4j_healthy = conn_neo4j.get_health() == "connected"
+    
+    if neo4j_healthy:
+        st.markdown("🟢 **Neo4j Graph Database**")
+        st.caption("Status: Connected")
+        
+        with st.expander("Available Graph Queries"):
+            tools = conn_neo4j.list_tools()
+            if tools:
+                for tool in tools:
+                    st.caption(tool.get('name'))
+            else:
+                st.caption("No tools available.")
+    else:
+        st.markdown("🔴 **Neo4j Graph Database**")
+        st.caption("Status: Not Connected")
+
+    st.markdown("---")
+    
+    # Establish and check the connection to the GenAI Toolbox
+    conn_toolbox = st.connection("genai_toolbox", type=GenAIToolboxConnection)
+    genai_toolbox_healthy = conn_toolbox.get_health() == "connected"
+
+    if genai_toolbox_healthy:
+        st.markdown("🟢 **PostgreSQL Customer DB**")
+        st.caption("Status: Connected (via GenAI Toolbox)")
+        with st.expander("Available SQL Tools"):
+            tools = conn_toolbox.list_tools()
+            if tools:
+                for tool in tools:
+                    st.caption(tool.get('name'))
+            else:
+                st.caption("No tools available.")
+    else:
+        st.markdown("🔴 **PostgreSQL Customer DB**")
+        st.caption("Status: Not Connected (via GenAI Toolbox)")
+
+    st.markdown("---")
     st.image("https://dist.neo4j.com/wp-content/uploads/20210617085700/neo4j-logo-2021.svg", width=150)
 
 st.title("AML Analyst Workbench")
@@ -60,15 +100,8 @@ def rerun():
     st.rerun()
 
 # --- Agent Initialization ---
-async def initialize_agent():
-    if st.session_state.kyc_agent is None:
-        st.session_state.kyc_agent = await init_agent()
-
-# Run the async function to initialize the agent
-try:
-    asyncio.run(initialize_agent())
-except Exception as e:
-    st.error(f"Failed to initialize KYC agent: {e}")
+# We now initialize the agent on-demand inside the chat logic
+# to ensure it gets the latest connection status.
 
 
 # Main layout with three columns
@@ -270,63 +303,46 @@ with main_col:
                             rerun()
                 
                 with copilot_tab:
-                    # Copilot logic remains the same, scoped to the single alert_id
+                    # Initialize conversation history for this specific alert
                     if f"conversation_{alert_id}" not in st.session_state:
                         st.session_state[f"conversation_{alert_id}"] = []
-                    
-                    chat_container = st.container(height=200)
-                    
+
+                    # Display conversation history
+                    chat_container = st.container(height=300)
                     with chat_container:
                         for message in st.session_state[f"conversation_{alert_id}"]:
                             with st.chat_message(message["role"]):
                                 st.markdown(message["content"])
-                    
-                    if prompt := st.chat_input("Ask the KYC agent about this alert...", key=f"chat_{alert_id}"):
+
+                    # Handle chat input
+                    if prompt := st.chat_input("Ask the KYC agent about this alert..."):
+                        # Append user message to this alert's conversation
                         st.session_state[f"conversation_{alert_id}"].append({"role": "user", "content": prompt})
-                        st.rerun()
-
-                    if (f"conversation_{alert_id}" in st.session_state and 
-                        st.session_state[f"conversation_{alert_id}"] and
-                        st.session_state[f"conversation_{alert_id}"][-1]["role"] == "user"):
                         
-                        last_message = st.session_state[f"conversation_{alert_id}"][-1]
-                        prompt = last_message["content"]
-
-                        with st.spinner("Analyzing..."):
-                            current_config = {'use_genai_toolbox': st.session_state.get('use_genai_toolbox', False)}
-                            if ('kyc_agent' not in st.session_state or 
-                                st.session_state.kyc_agent is None or
-                                st.session_state.get('agent_config') != current_config):
-                                try:
-                                    if not os.getenv("OPENAI_API_KEY"):
-                                        st.error("⚠️ OpenAI API Key is missing! Please add it to your .env file.")
-                                        st.stop()
-                                    with st.spinner("Initializing KYC Agent with new settings..."):
-                                        st.session_state.kyc_agent = asyncio.run(init_agent(use_genai_toolbox=current_config['use_genai_toolbox']))
-                                        st.session_state.agent_config = current_config
-                                    st.toast(f"Agent re-initialized!")
-                                except Exception as e:
-                                    st.error(f"Failed to initialize agent: {str(e)}")
+                        # -- Agent Initialization on Demand --
+                        try:
+                            with st.spinner("Initializing KYC Agent..."):
+                                kyc_agent = asyncio.run(
+                                    init_agent(
+                                        use_genai_toolbox=genai_toolbox_healthy,
+                                        genai_toolbox_conn=conn_toolbox if genai_toolbox_healthy else None
+                                    )
+                                )
+                                if kyc_agent is None:
+                                    st.error("Fatal: Agent initialization returned None.")
                                     st.stop()
+                        except Exception as e:
+                            st.error(f"Failed to initialize agent: {e}")
+                            st.stop()
+
+                        # -- Run Agent --
+                        with st.spinner("Thinking..."):
                             try:
-                                context_query = f"Analyzing Alert {alert_id}: {prompt}"
-                                history = st.session_state[f"conversation_{alert_id}"][:-1]
-                                response = asyncio.run(run_agent(
-                                    st.session_state.kyc_agent, 
-                                    context_query, 
-                                    history
-                                ))
-                                if response and response.strip():
-                                    st.session_state[f"conversation_{alert_id}"].append({"role": "assistant", "content": response})
-                                else:
-                                    st.session_state[f"conversation_{alert_id}"].append({"role": "assistant", "content": "The agent didn't provide a response. Please try again."})
+                                response = asyncio.run(run_agent(kyc_agent, prompt, st.session_state[f"conversation_{alert_id}"]))
+                                st.session_state[f"conversation_{alert_id}"].append({"role": "assistant", "content": response})
+                                st.rerun() # Rerun to display the new messages
                             except Exception as e:
-                                import traceback
-                                error_details = traceback.format_exc()
-                                error_msg = f"Agent Error: {str(e)}"
-                                st.error(error_msg)
-                                st.session_state[f"conversation_{alert_id}"].append({"role": "assistant", "content": f"I encountered an error: {str(e)}."})
-                        st.rerun()
+                                st.error(f"I encountered an error: {e}")
             else:
                 st.info("Analyst tools (Commentary, Copilot) are available when a single alert is selected.")
 
